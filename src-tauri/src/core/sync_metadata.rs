@@ -78,8 +78,7 @@ pub fn has_complete_skill_snapshot() -> bool {
 
 #[allow(dead_code)]
 pub fn write_all_from_db(store: &SkillStore) -> Result<()> {
-    let skills_dir = central_repo::skills_dir();
-    let _lock = RepoLock::acquire(&skills_dir, "write sync metadata")?;
+    let _lock = RepoLock::acquire("write sync metadata")?;
     write_all_from_db_unlocked(store)
 }
 
@@ -87,8 +86,7 @@ pub(crate) fn with_repo_lock<T, F>(operation: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
-    let skills_dir = central_repo::skills_dir();
-    let _lock = RepoLock::acquire(&skills_dir, operation)?;
+    let _lock = RepoLock::acquire(operation)?;
     f()
 }
 
@@ -103,8 +101,7 @@ pub(crate) fn write_all_from_db_unlocked(store: &SkillStore) -> Result<()> {
 
 #[allow(dead_code)]
 pub fn reindex_from_metadata(store: &SkillStore) -> Result<()> {
-    let skills_dir = central_repo::skills_dir();
-    let _lock = RepoLock::acquire(&skills_dir, "reindex sync metadata")?;
+    let _lock = RepoLock::acquire("reindex sync metadata")?;
     reindex_from_metadata_unlocked(store)
 }
 
@@ -211,8 +208,7 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
 
 #[allow(dead_code)]
 pub fn ensure_skill_metadata(store: &SkillStore, skill_id: &str) -> Result<()> {
-    let skills_dir = central_repo::skills_dir();
-    let _lock = RepoLock::acquire(&skills_dir, "write skill metadata")?;
+    let _lock = RepoLock::acquire("write skill metadata")?;
     ensure_skill_metadata_unlocked(store, skill_id)
 }
 
@@ -622,10 +618,8 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::core::{central_repo, skill_store::SkillStore};
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::MutexGuard;
     use tempfile::{TempDir, tempdir};
-
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     struct TestRepo {
         _lock: MutexGuard<'static, ()>,
@@ -640,10 +634,7 @@ mod tests {
     }
 
     fn test_repo() -> TestRepo {
-        let lock = TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let lock = central_repo::test_base_dir_lock();
         let tmp = tempdir().unwrap();
         let base = tmp.path().join("repo");
         central_repo::set_test_base_dir_override(Some(base.clone()));

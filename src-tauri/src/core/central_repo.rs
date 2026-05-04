@@ -10,6 +10,22 @@ const CONFIG_FILE_NAME: &str = "repo-config.json";
 static BASE_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static SKILLS_DIR_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
+/// Global mutex shared by every test that mutates the base-dir override via
+/// [`set_test_base_dir_override`]. The override is process-wide static state,
+/// so any two tests holding their own per-module locks can still race. Tests
+/// must take this guard before calling `set_test_base_dir_override` and keep
+/// it alive until they restore the previous value.
+#[cfg(test)]
+static TEST_BASE_DIR_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn test_base_dir_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_BASE_DIR_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct RepoPathConfig {
     repo_path: Option<String>,
