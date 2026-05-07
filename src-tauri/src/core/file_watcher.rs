@@ -37,15 +37,15 @@ fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
             let project_path = PathBuf::from(&project.path);
             seen_dirs.clear();
             for adapter in &adapters {
-                if adapter.relative_skills_dir.is_empty() {
+                let project_dir = adapter.project_relative_skills_dir();
+                if project_dir.is_empty() {
                     continue;
                 }
-                if !seen_dirs.insert(adapter.relative_skills_dir.clone()) {
+                if !seen_dirs.insert(project_dir.to_string()) {
                     continue;
                 }
-                let skills_dir = project_path.join(&adapter.relative_skills_dir);
-                let disabled_dir =
-                    project_path.join(format!("{}-disabled", &adapter.relative_skills_dir));
+                let skills_dir = project_path.join(project_dir);
+                let disabled_dir = project_path.join(format!("{}-disabled", project_dir));
                 // Only watch dirs that actually have skills inside. Watching the parent
                 // or empty leaf dirs would hold OS handles (Windows ReadDirectoryChangesW)
                 // and prevent users from deleting the agent-config folder (e.g. .codex)

@@ -347,6 +347,7 @@ mod tests {
             override_skills_dir: Some(tmp.path().to_string_lossy().to_string()),
             is_custom: true,
             recursive_scan: false,
+            project_relative_skills_dir: None,
         };
 
         let plan = scan_local_skills_with_adapters(&[], &[adapter]).unwrap();
@@ -374,6 +375,7 @@ mod tests {
             override_skills_dir: Some(primary.to_string_lossy().to_string()),
             is_custom: true,
             recursive_scan: false,
+            project_relative_skills_dir: None,
         };
 
         let adapter_with_extra = tool_adapters::ToolAdapter {

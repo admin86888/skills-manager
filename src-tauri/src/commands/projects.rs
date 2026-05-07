@@ -50,19 +50,14 @@ pub struct ProjectAgentTargetDto {
 fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
     let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for adapter in tool_adapters::all_tool_adapters(store) {
-        if adapter.relative_skills_dir.is_empty() {
+        let project_dir = adapter.project_relative_skills_dir().to_string();
+        if project_dir.is_empty() {
             continue;
         }
-        if let Some((_, agents)) = grouped
-            .iter_mut()
-            .find(|(dir, _)| *dir == adapter.relative_skills_dir)
-        {
+        if let Some((_, agents)) = grouped.iter_mut().find(|(dir, _)| *dir == project_dir) {
             agents.push((adapter.key, adapter.display_name));
         } else {
-            grouped.push((
-                adapter.relative_skills_dir,
-                vec![(adapter.key, adapter.display_name)],
-            ));
+            grouped.push((project_dir, vec![(adapter.key, adapter.display_name)]));
         }
     }
 
@@ -134,9 +129,9 @@ fn resolve_agent_skills_roots(
     let adapter = tool_adapters::all_tool_adapters(store)
         .into_iter()
         .find(|adapter| adapter.key == agent)?;
-    let skills_root = Path::new(&rec.path).join(&adapter.relative_skills_dir);
-    let disabled_root =
-        Path::new(&rec.path).join(format!("{}-disabled", &adapter.relative_skills_dir));
+    let project_dir = adapter.project_relative_skills_dir();
+    let skills_root = Path::new(&rec.path).join(project_dir);
+    let disabled_root = Path::new(&rec.path).join(format!("{}-disabled", project_dir));
     Some((skills_root, Some(disabled_root)))
 }
 

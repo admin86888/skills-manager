@@ -129,10 +129,13 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
             enabled: !disabled.contains(&adapter.key),
             is_custom: adapter.is_custom,
             has_path_override: adapter.has_path_override(),
-            project_relative_skills_dir: if adapter.relative_skills_dir.is_empty() {
-                None
-            } else {
-                Some(adapter.relative_skills_dir.clone())
+            project_relative_skills_dir: {
+                let project_dir = adapter.project_relative_skills_dir();
+                if project_dir.is_empty() {
+                    None
+                } else {
+                    Some(project_dir.to_string())
+                }
             },
         })
         .collect()
