@@ -702,6 +702,7 @@
     "batchUpdatedProject": "{{count}} skills updated in project",
     "batchUpdateCenterFailed": "{{count}} skills failed to update to Skills Center",
     "batchUpdateProjectFailed": "{{count}} skills failed to update in project",
+    "skillDirectoryNotFound": "Skill directory not found",
     "batchEditTags": "Tags ({{count}})",
     "batchTagsUpdated": "Tags updated for {{count}} center skills",
     "batchTagsFailed": "{{count}} center skills failed to update tags"

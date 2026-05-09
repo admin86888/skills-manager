@@ -6,6 +6,7 @@ import { cn } from "../utils";
 import { computePresetStatus } from "../lib/presetStatus";
 import { getScenarioIconOption } from "../lib/scenarioIcons";
 import type { ManagedSkill, Scenario } from "../lib/tauri";
+import { getErrorMessage } from "../lib/error";
 
 export interface PresetBarProps {
   presets: Scenario[];
@@ -44,44 +45,54 @@ export function PresetBar({
 
   const handleActivate = useCallback(async (preset: Scenario) => {
     setLoadingKey(`${preset.id}-add`);
-    const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
-    let added = 0, skipped = 0, failed = 0;
-    for (const skill of presetSkills) {
-      for (const agentKey of agentKeys) {
-        if (existsInWorkspace(skill, agentKey)) { skipped++; continue; }
-        try { await onAddSkill(skill, agentKey); added++; }
-        catch { failed++; }
+    try {
+      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      let added = 0, skipped = 0, failed = 0;
+      for (const skill of presetSkills) {
+        for (const agentKey of agentKeys) {
+          if (existsInWorkspace(skill, agentKey)) { skipped++; continue; }
+          try { await onAddSkill(skill, agentKey); added++; }
+          catch { failed++; }
+        }
       }
+      if (added > 0) {
+        toast.success(t("presetActions.addedToast", { added, skipped }));
+      } else if (failed === 0) {
+        toast.info(t("presetActions.nothingToAdd"));
+      }
+      if (failed > 0) toast.error(t("presetActions.partialFailedToast", { count: failed }));
+      await onComplete();
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setLoadingKey(null);
     }
-    await onComplete();
-    if (added > 0) {
-      toast.success(t("presetActions.addedToast", { added, skipped }));
-    } else if (failed === 0) {
-      toast.info(t("presetActions.nothingToAdd"));
-    }
-    if (failed > 0) toast.error(t("presetActions.partialFailedToast", { count: failed }));
-    setLoadingKey(null);
   }, [agentKeys, existsInWorkspace, managedSkills, onAddSkill, onComplete, t]);
 
   const handleDeactivate = useCallback(async (preset: Scenario) => {
     setLoadingKey(`${preset.id}-remove`);
-    const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
-    let removed = 0, failed = 0;
-    for (const skill of presetSkills) {
-      for (const agentKey of agentKeys) {
-        if (!existsInWorkspace(skill, agentKey)) continue;
-        try { await onRemoveSkill(skill, agentKey); removed++; }
-        catch { failed++; }
+    try {
+      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      let removed = 0, failed = 0;
+      for (const skill of presetSkills) {
+        for (const agentKey of agentKeys) {
+          if (!existsInWorkspace(skill, agentKey)) continue;
+          try { await onRemoveSkill(skill, agentKey); removed++; }
+          catch { failed++; }
+        }
       }
+      if (removed > 0) {
+        toast.success(t("presetActions.removedToast", { removed }));
+      } else if (failed === 0) {
+        toast.info(t("presetActions.nothingToRemove"));
+      }
+      if (failed > 0) toast.error(t("presetActions.partialFailedToast", { count: failed }));
+      await onComplete();
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setLoadingKey(null);
     }
-    await onComplete();
-    if (removed > 0) {
-      toast.success(t("presetActions.removedToast", { removed }));
-    } else if (failed === 0) {
-      toast.info(t("presetActions.nothingToRemove"));
-    }
-    if (failed > 0) toast.error(t("presetActions.partialFailedToast", { count: failed }));
-    setLoadingKey(null);
   }, [agentKeys, existsInWorkspace, managedSkills, onComplete, onRemoveSkill, t]);
 
   if (visiblePresets.length === 0) return null;

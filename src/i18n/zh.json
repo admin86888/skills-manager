@@ -702,6 +702,7 @@
     "batchUpdatedProject": "已更新项目中的 {{count}} 个 Skill",
     "batchUpdateCenterFailed": "{{count}} 个 Skill 更新到 Skills 中心失败",
     "batchUpdateProjectFailed": "{{count}} 个 Skill 更新到项目失败",
+    "skillDirectoryNotFound": "未找到 Skill 目录",
     "batchEditTags": "标签 ({{count}})",
     "batchTagsUpdated": "已更新 {{count}} 个中心 Skill 的标签",
     "batchTagsFailed": "{{count}} 个中心 Skill 标签更新失败"

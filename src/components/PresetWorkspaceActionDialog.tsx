@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, Square, SquareCheck, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -7,6 +7,7 @@ import { cn } from "../utils";
 import type { ManagedSkill, Scenario } from "../lib/tauri";
 import { getScenarioIconOption } from "../lib/scenarioIcons";
 import { computePresetStatus } from "../lib/presetStatus";
+import { getErrorMessage } from "../lib/error";
 
 export interface PresetWorkspaceAgent {
   key: string;
@@ -28,7 +29,6 @@ interface Props {
   presets: Scenario[];
   managedSkills: ManagedSkill[];
   agents: PresetWorkspaceAgent[];
-  initialPresetId?: string | null;
   initialSelectedAgents?: string[];
   onClose: () => void;
   existsInWorkspace: (skill: ManagedSkill, agentKey: string) => boolean;
@@ -51,7 +51,7 @@ export function PresetWorkspaceActionDialog({
   onComplete,
 }: Props) {
   const { t } = useTranslation();
-  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [selectedAgentsOverride, setSelectedAgentsOverride] = useState<string[] | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
 
   const availableAgents = useMemo(
@@ -67,70 +67,77 @@ export function PresetWorkspaceActionDialog({
     return enabled.length > 0 ? enabled : availableAgents.map((a) => a.key);
   }, [availableAgents, initialSelectedAgents]);
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedAgents(defaultAgentKeys);
-    setLoadingKey(null);
-  }, [open, defaultAgentKeys]);
+  const selectedAgents = selectedAgentsOverride ?? defaultAgentKeys;
 
   const selectedAgentSet = useMemo(() => new Set(selectedAgents), [selectedAgents]);
 
   const toggleAgent = (key: string) => {
-    setSelectedAgents((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
-    );
+    setSelectedAgentsOverride((current) => {
+      const prev = current ?? defaultAgentKeys;
+      return prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
+    });
   };
 
   const handleActivate = async (preset: Scenario) => {
     const key = `${preset.id}-add`;
     setLoadingKey(key);
-    const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
-    const result: PresetWorkspaceActionResult = { added: 0, removed: 0, skipped: 0, failed: 0 };
-    for (const skill of presetSkills) {
-      for (const agentKey of selectedAgents) {
-        if (existsInWorkspace(skill, agentKey)) { result.skipped++; continue; }
-        try {
-          await onAddSkill(skill, agentKey);
-          result.added++;
-        } catch {
-          result.failed++;
+    try {
+      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      const result: PresetWorkspaceActionResult = { added: 0, removed: 0, skipped: 0, failed: 0 };
+      for (const skill of presetSkills) {
+        for (const agentKey of selectedAgents) {
+          if (existsInWorkspace(skill, agentKey)) { result.skipped++; continue; }
+          try {
+            await onAddSkill(skill, agentKey);
+            result.added++;
+          } catch {
+            result.failed++;
+          }
         }
       }
+      if (result.added > 0) {
+        toast.success(t("presetActions.addedToast", { added: result.added, skipped: result.skipped }));
+      } else if (result.failed === 0) {
+        toast.info(t("presetActions.nothingToAdd"));
+      }
+      if (result.failed > 0) toast.error(t("presetActions.partialFailedToast", { count: result.failed }));
+      await onComplete(result);
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setLoadingKey(null);
     }
-    await onComplete(result);
-    if (result.added > 0) {
-      toast.success(t("presetActions.addedToast", { added: result.added, skipped: result.skipped }));
-    } else if (result.failed === 0) {
-      toast.info(t("presetActions.nothingToAdd"));
-    }
-    if (result.failed > 0) toast.error(t("presetActions.partialFailedToast", { count: result.failed }));
-    setLoadingKey(null);
   };
 
   const handleDeactivate = async (preset: Scenario) => {
     const key = `${preset.id}-remove`;
     setLoadingKey(key);
-    const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
-    const result: PresetWorkspaceActionResult = { added: 0, removed: 0, skipped: 0, failed: 0 };
-    for (const skill of presetSkills) {
-      for (const agentKey of selectedAgents) {
-        if (!existsInWorkspace(skill, agentKey)) continue;
-        try {
-          await onRemoveSkill(skill, agentKey);
-          result.removed++;
-        } catch {
-          result.failed++;
+    try {
+      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      const result: PresetWorkspaceActionResult = { added: 0, removed: 0, skipped: 0, failed: 0 };
+      for (const skill of presetSkills) {
+        for (const agentKey of selectedAgents) {
+          if (!existsInWorkspace(skill, agentKey)) continue;
+          try {
+            await onRemoveSkill(skill, agentKey);
+            result.removed++;
+          } catch {
+            result.failed++;
+          }
         }
       }
+      if (result.removed > 0) {
+        toast.success(t("presetActions.removedToast", { removed: result.removed }));
+      } else if (result.failed === 0) {
+        toast.info(t("presetActions.nothingToRemove"));
+      }
+      if (result.failed > 0) toast.error(t("presetActions.partialFailedToast", { count: result.failed }));
+      await onComplete(result);
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setLoadingKey(null);
     }
-    await onComplete(result);
-    if (result.removed > 0) {
-      toast.success(t("presetActions.removedToast", { removed: result.removed }));
-    } else if (result.failed === 0) {
-      toast.info(t("presetActions.nothingToRemove"));
-    }
-    if (result.failed > 0) toast.error(t("presetActions.partialFailedToast", { count: result.failed }));
-    setLoadingKey(null);
   };
 
   if (!open) return null;

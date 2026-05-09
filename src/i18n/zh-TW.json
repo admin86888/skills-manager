@@ -635,6 +635,7 @@
     "batchUpdatedProject": "已更新專案中的 {{count}} 個 Skill",
     "batchUpdateCenterFailed": "{{count}} 個 Skill 更新到 Skills 中心失敗",
     "batchUpdateProjectFailed": "{{count}} 個 Skill 更新到專案失敗",
+    "skillDirectoryNotFound": "找不到 Skill 目錄",
     "batchEditTags": "標籤 ({{count}})",
     "batchTagsUpdated": "已更新 {{count}} 個中心 Skill 的標籤",
     "batchTagsFailed": "{{count}} 個中心 Skill 標籤更新失敗"

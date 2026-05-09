@@ -150,7 +150,6 @@ export function ProjectDetail() {
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
-  const [managedSkillDirNames, setManagedSkillDirNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
@@ -338,32 +337,32 @@ export function ProjectDetail() {
     return map;
   }, [skills]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadManagedSkillDirNames = async () => {
-      if (managedSkills.length === 0) {
-        setManagedSkillDirNames({});
-        return;
+  const projectCenterSkillIdsByAgent = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const skill of skills) {
+      if (!skill.center_skill_id) continue;
+      if (!map[skill.agent]) {
+        map[skill.agent] = [];
       }
-      try {
-        const slugs = await api.slugifySkillNames(managedSkills.map((skill) => skill.name));
-        if (cancelled) return;
-        const next: Record<string, string> = {};
-        managedSkills.forEach((skill, index) => {
-          next[skill.id] = slugs[index] || skill.name;
-        });
-        setManagedSkillDirNames(next);
-      } catch {
-        if (!cancelled) {
-          setManagedSkillDirNames(Object.fromEntries(managedSkills.map((skill) => [skill.id, skill.name])));
-        }
-      }
-    };
-    loadManagedSkillDirNames();
-    return () => {
-      cancelled = true;
-    };
-  }, [managedSkills]);
+      map[skill.agent].push(skill.center_skill_id);
+    }
+    return map;
+  }, [skills]);
+
+  const projectPresetVariants = useMemo(() => {
+    const map = new Map<string, ProjectSkill>();
+    for (const skill of skills) {
+      if (!skill.center_skill_id) continue;
+      map.set(`${skill.center_skill_id}::${skill.agent}`, skill);
+    }
+    return map;
+  }, [skills]);
+
+  const findProjectPresetVariant = useCallback(
+    (skill: ManagedSkill, agentKey: string) =>
+      projectPresetVariants.get(`${skill.id}::${agentKey}`) ?? null,
+    [projectPresetVariants]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -766,11 +765,9 @@ export function ProjectDetail() {
 
   const presetSkillExistsInProject = useCallback(
     (skill: ManagedSkill, agentKey: string) => {
-      const dirName = managedSkillDirNames[skill.id];
-      if (!dirName) return false;
-      return (projectSkillDirNamesByAgent[agentKey] ?? []).includes(dirName.toLowerCase());
+      return findProjectPresetVariant(skill, agentKey) !== null;
     },
-    [managedSkillDirNames, projectSkillDirNamesByAgent]
+    [findProjectPresetVariant]
   );
 
   const handleAddPresetSkillToProject = useCallback(
@@ -784,11 +781,11 @@ export function ProjectDetail() {
   const handleRemovePresetSkillFromProject = useCallback(
     async (skill: ManagedSkill, agentKey: string) => {
       if (!id) return;
-      const dirName = managedSkillDirNames[skill.id];
-      if (!dirName) throw new Error("Missing skill directory name");
-      await api.deleteProjectSkill(id, dirName, agentKey);
+      const projectVariant = findProjectPresetVariant(skill, agentKey);
+      if (!projectVariant) throw new Error(t("project.skillDirectoryNotFound"));
+      await api.deleteProjectSkill(id, projectVariant.relative_path, agentKey);
     },
-    [id, managedSkillDirNames]
+    [findProjectPresetVariant, id, t]
   );
 
   const handlePresetActionComplete = useCallback(async () => {
@@ -1384,6 +1381,7 @@ export function ProjectDetail() {
           selectedAgents={selectedExportAgents}
           onSelectedAgentsChange={setSelectedExportAgents}
           projectSkillDirNamesByAgent={projectSkillDirNamesByAgent}
+          projectCenterSkillIdsByAgent={projectCenterSkillIdsByAgent}
           onExport={handleExportFromCenter}
           onBatchExport={handleBatchExportFromCenter}
           onClose={() => setShowExportDialog(false)}
@@ -1549,6 +1547,7 @@ function AddFromLibraryDialog({
   selectedAgents,
   onSelectedAgentsChange,
   projectSkillDirNamesByAgent,
+  projectCenterSkillIdsByAgent,
   onExport,
   onBatchExport,
   onClose,
@@ -1558,6 +1557,7 @@ function AddFromLibraryDialog({
   selectedAgents: string[];
   onSelectedAgentsChange: (agents: string[]) => void;
   projectSkillDirNamesByAgent: Record<string, string[]>;
+  projectCenterSkillIdsByAgent: Record<string, string[]>;
   onExport: (skill: ManagedSkill) => Promise<void>;
   onBatchExport: (skills: ManagedSkill[]) => Promise<void>;
   onClose: () => void;
@@ -1682,12 +1682,18 @@ function AddFromLibraryDialog({
 
   const isAlreadyExists = useCallback((skill: ManagedSkill) => {
     const exportDirName = dirNameMap[skill.id];
-    if (dirNameMapError || selectedAgents.length === 0) return true;
+    if (selectedAgents.length === 0) return true;
+    if (selectedAgents.some((agent) =>
+      (projectCenterSkillIdsByAgent[agent] ?? []).includes(skill.id)
+    )) {
+      return true;
+    }
+    if (dirNameMapError) return true;
     if (!exportDirName) return false;
     return selectedAgents.some((agent) =>
       (projectSkillDirNamesByAgent[agent] ?? []).includes(exportDirName.toLowerCase())
     );
-  }, [dirNameMap, dirNameMapError, projectSkillDirNamesByAgent, selectedAgents]);
+  }, [dirNameMap, dirNameMapError, projectCenterSkillIdsByAgent, projectSkillDirNamesByAgent, selectedAgents]);
 
   const selectableFiltered = useMemo(
     () => filtered.filter((s) => !isAlreadyExists(s)),
