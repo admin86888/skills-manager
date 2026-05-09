@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.18.0] - 2026-05-09
+
+### 变更
+- **场景更名为 Preset**：应用内的“场景 / Scenario”已统一更名为 Preset，覆盖界面标签、侧边栏、设置、帮助和多语言文案。已有场景会以 Preset 形式继续使用，不需要迁移数据。
+- **Preset bar 取代“应用 Preset”弹窗**：Preset 现在以内联标签形式显示在 Global Workspace 和 Project Workspace 的搜索/标签筛选下方。点击标签即可为当前 Agent 范围启用或移除该 Preset 的全部 Skills；已启用会显示 ✓，部分安装会显示已安装/总数。
+- **Global Workspace 重设计**：每个 Agent 都有独立页面，可从侧边栏进入；固定的 **全部 Agents** 入口可一次管理所有已安装 Agent。每个 Agent 页面都支持标签筛选、多选和批量移除。
+- **侧边栏改进**：Preset 和项目工作区分组支持折叠；Global Workspace 中的 Agent 支持拖拽排序。
+- **新增 Agent 图标**：内置 Agent 现在会在设置、Global Workspace、项目弹窗和 Agent 开关中显示对应图标，多 Agent 列表更容易识别。
+- **更多 Preset 图标**：Preset 图标选择器新增 Agents、CLI、数据、分析、研究、安全、自动化、基础设施、实验等更多选项。
+
 ## [1.17.0] - 2026-05-07
 
 ### 新增

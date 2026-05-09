@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-05-09
+
+### Changed
+
+- **Scenarios renamed to Presets** — "场景 / Scenario" has been renamed to "Preset" throughout the app (UI labels, sidebar, settings, help, and all translations). If you were using scenarios, they are now called Presets and work exactly the same way — no data migration needed.
+- **Preset bar replaces the "Apply Preset" modal** — Presets now appear as inline pill tags directly below the search and tag filters in Global Workspace and Project Workspace. Click a pill to instantly activate or deactivate all its skills for the current agent scope. Active presets show ✓; partially installed ones show an installed/total count. No more modal dialog.
+- **Global Workspace redesigned** — Each agent now has its own dedicated page accessible from the sidebar. Use the pinned **All Agents** entry to manage skills across every installed agent at once. Tag filters, multi-select, and batch remove are all available per-agent.
+- **Sidebar improvements** — The Presets and Project Workspaces sections can be collapsed. Agents in the Global Workspace section support drag-to-reorder.
+- **Agent icons added** — Built-in agents now show their own icons across Settings, Global Workspace, project dialogs, and agent toggles, making multi-agent lists easier to scan.
+- **More Preset icons** — Presets now offer a broader icon picker, including options for agents, CLI work, data, analytics, research, security, automation, infrastructure, and experiments.
+
 ## [1.17.0] - 2026-05-07
 
 ### Added

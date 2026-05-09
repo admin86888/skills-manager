@@ -36,6 +36,7 @@ import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
+import { AgentIcon } from "../components/AgentIcon";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import type { AppUpdateInfo } from "../lib/tauri";
@@ -542,6 +543,11 @@ export function Settings() {
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
+                <AgentIcon
+                  agentKey={agent.key}
+                  displayName={agent.display_name}
+                  className="h-5 w-5 rounded-[5px]"
+                />
                 <h3 className={cn("truncate text-[13px] font-medium", agent.installed ? "text-secondary" : "text-muted")}>
                   {agent.display_name}
                 </h3>

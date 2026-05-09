@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronUp, Circle, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../utils";
+import { AgentIcon } from "./AgentIcon";
 
 export interface AgentToggleItem {
   key: string;
@@ -121,6 +122,11 @@ function AgentToggle({
           <Circle className="h-3.5 w-3.5 text-muted" />
         )}
       </span>
+      <AgentIcon
+        agentKey={item.key}
+        displayName={item.displayName}
+        className="h-5 w-5 rounded-[5px]"
+      />
       <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-secondary">
         {item.displayName}
       </span>

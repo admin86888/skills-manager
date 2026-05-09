@@ -71,7 +71,7 @@ export function CreateScenarioDialog({ open, onClose, onCreate }: Props) {
           </div>
           <div>
             <label className="block text-[13px] font-medium text-tertiary mb-1.5">{t("scenario.icon")}</label>
-            <div className="grid grid-cols-5 gap-1.5">
+            <div className="grid max-h-[220px] grid-cols-[repeat(auto-fill,minmax(36px,1fr))] gap-1.5 overflow-y-auto pr-1">
               {SCENARIO_ICON_OPTIONS.map((option) => {
                 const Icon = option.icon;
                 const selected = option.key === icon;

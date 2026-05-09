@@ -39,33 +39,34 @@
 
 - **Unified skill library** — Install skills from Git repos, local folders, `.zip` / `.skill` archives, or the [skills.sh](https://skills.sh) marketplace. Everything goes into one central repo, which defaults to `~/.skills-manager` and can be customized in **Settings**.
 - **Marketplace + AI search** — Browse popular skills from the marketplace, run keyword search, or enable SkillsMP AI search with your API key.
-- **Multi-tool sync** — Sync skills to any supported tool via symlink or copy with a single click.
+- **Presets** — Group skills into named presets. In any workspace, click a preset pill to instantly activate or deactivate all its skills for the current agent scope. The sidebar lists all presets for quick access.
+- **Global Workspace** — Browse and manage globally installed skills per agent. Switch between agents from the sidebar, or use the All Agents overview to manage across all installed agents at once.
 - **Project Workspaces** — View and manage project-local skill folders for supported agents, compare them with your central library, and sync changes in either direction. Supports nested skill directories and per-agent assignment when exporting.
-- **Linked Workspaces** — Point to any directory as a skills root — useful for skills that live outside the default agent paths. Managed as a standalone workspace without participating in global scenario sync.
-- **Scenarios** — Group skills into scenarios, configure per-scenario agent toggles, drag to reorder enabled skills, and switch between setups instantly from the left sidebar.
+- **Linked Workspaces** — Point to any directory as a skills root — useful for skills that live outside the default agent paths. Managed as a standalone workspace without participating in global preset sync.
+- **Multi-tool sync** — Sync skills to any supported tool via symlink or copy with a single click.
 - **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete. Project Workspaces also support bulk enable/disable for project-local skills.
 - **Skill tagging and filters** — Tag skills, use tags to group similar skills, and filter by source or tag to narrow large libraries quickly.
 - **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
 - **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
 - **Git backup and restore** — Version-control your skill library with Git for backup and multi-machine sync, then restore snapshot versions from Version History when needed.
-- **Flexible app settings** — Configure repo path, sync mode, default scenario, theme, text size, language, tray behavior, proxy, Git remote, and update checks in one place.
+- **Flexible app settings** — Configure repo path, sync mode, theme, text size, language, tray behavior, proxy, Git remote, and update checks in one place.
 
 ## Core Concepts
 
-- **Scenarios are global skill sets** — A scenario is your global set of enabled skills for a tool. For Claude Code, these skills are synced to `~/.claude/skills/`.
-- **Project Workspaces are project-local skill sets** — A project workspace manages the skills that live inside a specific project. For Claude Code, these skills are synced to `<project>/.claude/skills/`.
-- **Switch scenarios from the sidebar** — Click a scenario in the left sidebar to change the active global setup for your current workflow.
-- **Batch control works in both places** — You can bulk enable or disable skills in scenarios and in Project Workspaces.
+- **Presets are reusable skill groups** — A preset is a named collection of skills. Activate a preset in any workspace to add all its skills to the selected agents; deactivate to remove them. Applying a preset is a one-time copy — not a live sync.
+- **Global Workspace manages per-agent global skills** — Each installed agent has its own global skills folder (e.g. `~/.claude/skills/` for Claude Code). Use Global Workspace to view, add, and remove skills for each agent, or manage all agents at once from the All Agents overview.
+- **Project Workspaces are project-local skill sets** — A project workspace manages the skills that live inside a specific project (e.g. `<project>/.claude/skills/`). Skills added here only apply to that project.
 - **Tags are for grouping and filtering** — Use tags to label similar skills, then filter by tag to find the subset you want quickly.
+- **Batch control works everywhere** — Multi-select skills in any workspace for bulk operations.
 
 ## Quick Start
 
-1. Create a scenario or switch to one from the left sidebar.
-2. Install skills from local folders, Git repositories, archives, or the marketplace. If you have a SkillsMP API key, you can also turn on AI search.
-3. Open **My Skills** to decide which skills belong to the active scenario, tag them, review docs, and bulk enable or disable them.
-4. Sync enabled scenario skills to detected tools, or use **Project Workspaces** to manage project-local skills in `<project>/.claude/skills/`, including bulk enable/disable and two-way sync with your central library.
-5. Configure agent paths, custom tools, sync mode, default scenario, theme, language, proxy, and Git preferences in **Settings**.
+1. Install skills from local folders, Git repositories, archives, or the marketplace. If you have a SkillsMP API key, you can also turn on AI search.
+2. Open **Global Workspace** from the sidebar and pick an agent (e.g. Claude Code).
+3. Click a **Preset** pill to activate its skills for that agent. Active presets show a ✓; partial installs show a count badge.
+4. To manage project-local skills, open a **Project Workspace** and use the same preset pills or add skills individually.
+5. Configure agent paths, custom tools, theme, language, proxy, and Git preferences in **Settings**.
 6. If you want history or multi-machine sync, set a Git remote in **Settings** and run **Start Backup** or **Sync to Git** from **My Skills**.
 
 ## Git Backup
