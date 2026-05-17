@@ -468,6 +468,8 @@
     "exportLogsHint": "Bundle recent logs as a zip in your Downloads folder",
     "exportLogsDone": "Logs exported ({{count}} file(s)). Drag the zip into your GitHub issue.",
     "exportLogsFailed": "Failed to export logs.",
+    "panicBanner": "Skills Manager crashed during the last session ({{time}}).",
+    "panicDismiss": "Dismiss",
     "gitBackup": "Git Sync",
     "gitBackupDesc": "Back up your skill library to a Git repository for version control and multi-machine sync.",
     "proxyConfig": "Network Proxy",

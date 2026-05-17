@@ -15,6 +15,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  AlertTriangle,
   BookOpen,
   Bug,
   Download,
@@ -173,6 +174,7 @@ export function Settings() {
   const [openingGithub, setOpeningGithub] = useState(false);
   const [reportingIssue, setReportingIssue] = useState(false);
   const [exportingLogs, setExportingLogs] = useState(false);
+  const [lastPanic, setLastPanic] = useState<api.PanicInfo | null>(null);
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [centralRepoPathOverride, setCentralRepoPathOverride] = useState<string | null>(null);
   const [editingCentralRepoPath, setEditingCentralRepoPath] = useState(false);
@@ -307,6 +309,10 @@ export function Settings() {
       toast.error(t("common.error"));
     }
   };
+
+  useEffect(() => {
+    api.checkLastPanic().then(setLastPanic).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -494,23 +500,55 @@ export function Settings() {
     }
   };
 
+  const handleDismissPanic = async () => {
+    try {
+      await api.clearLastPanic();
+    } catch (err) {
+      console.warn("Failed to clear last_panic.log", err);
+    }
+    setLastPanic(null);
+  };
+
   const handleReportIssue = async () => {
     setReportingIssue(true);
     try {
-      const [info, logExcerpt] = await Promise.all([
+      const [info, logExcerpt, panicInfo] = await Promise.all([
         api.getDiagnosticInfo(),
         api.getRecentLogExcerpt().catch((err) => {
           console.warn("Failed to read log excerpt", err);
           return null;
         }),
+        api.checkLastPanic().catch(() => null),
       ]);
+      const enabledBuiltin = enabledTools
+        .filter((tool) => !tool.is_custom)
+        .map((tool) => tool.key);
+      const enabledCustomCount = enabledTools.filter((tool) => tool.is_custom).length;
+      const agentsLine = enabledBuiltin.length === 0 && enabledCustomCount === 0
+        ? "(none)"
+        : [
+            enabledBuiltin.join(", "),
+            enabledCustomCount > 0 ? `${enabledCustomCount} custom` : "",
+          ].filter(Boolean).join(", ");
       const parts = [
         "**Diagnostics** (auto-collected by Skills Manager)",
         "",
         `- App version: \`${info.app_version}\``,
         `- OS: \`${info.os} ${info.os_version} (${info.arch})\``,
+        `- UI locale: \`${i18n.language}\``,
+        `- Enabled agents: ${agentsLine}`,
         `- Central repo: \`${info.central_repo_path}\`${info.central_repo_path_overridden ? " (custom path)" : ""}`,
       ];
+      if (panicInfo) {
+        parts.push(
+          "",
+          `**Last panic** (${panicInfo.timestamp})`,
+          "",
+          "```",
+          panicInfo.message,
+          "```",
+        );
+      }
       if (logExcerpt) {
         parts.push(
           "",
@@ -544,6 +582,14 @@ export function Settings() {
       }
       if (copied) {
         toast.success(t("settings.diagnosticsCopied"));
+        if (panicInfo) {
+          try {
+            await api.clearLastPanic();
+          } catch (err) {
+            console.warn("Failed to clear last_panic.log", err);
+          }
+          setLastPanic(null);
+        }
       } else {
         toast.message(t("settings.diagnosticsCopyManual"), { description: md });
       }
@@ -1496,7 +1542,37 @@ export function Settings() {
         </section>
 
         {/* About */}
-        <section>
+        <section className="space-y-2">
+          {lastPanic && (
+            <div className="app-panel flex flex-wrap items-center justify-between gap-2 p-3 border border-red-500/40 bg-red-500/10">
+              <div className="flex min-w-0 items-center gap-2 text-[13px] text-red-700 dark:text-red-300">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{t("settings.panicBanner", { time: lastPanic.timestamp })}</span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleReportIssue}
+                  disabled={reportingIssue}
+                  className={`${actionButtonClass} bg-red-600 hover:bg-red-700 text-white border-red-600`}
+                >
+                  {reportingIssue ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Bug className="w-3 h-3" />
+                  )}
+                  {t("settings.reportIssue")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDismissPanic}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {t("settings.panicDismiss")}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="app-panel flex flex-wrap items-start justify-between gap-3 p-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-surface-hover border border-border flex items-center justify-center">

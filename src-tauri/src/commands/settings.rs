@@ -244,6 +244,51 @@ fn detect_os_version() -> String {
 }
 
 #[derive(serde::Serialize)]
+pub struct PanicInfo {
+    pub timestamp: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn check_last_panic(app: tauri::AppHandle) -> Result<Option<PanicInfo>, AppError> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| AppError::io(format!("Failed to resolve log dir: {e}")))?;
+    let panic_path = log_dir.join("last_panic.log");
+    if !panic_path.exists() {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let metadata = std::fs::metadata(&panic_path).map_err(AppError::io)?;
+        let modified = metadata
+            .modified()
+            .map_err(AppError::io)
+            .unwrap_or(std::time::SystemTime::now());
+        let datetime: chrono::DateTime<chrono::Local> = modified.into();
+        let timestamp = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+        let content = std::fs::read_to_string(&panic_path).unwrap_or_default();
+        let first_lines: Vec<&str> = content.lines().take(3).collect();
+        let message = log_sanitize::sanitize(&first_lines.join("\n"));
+        Ok(Some(PanicInfo { timestamp, message }))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn clear_last_panic(app: tauri::AppHandle) -> Result<(), AppError> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| AppError::io(format!("Failed to resolve log dir: {e}")))?;
+    let panic_path = log_dir.join("last_panic.log");
+    if panic_path.exists() {
+        std::fs::remove_file(&panic_path).map_err(AppError::io)?;
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
 pub struct LogExcerpt {
     pub log_path: String,
     pub excerpt: String,

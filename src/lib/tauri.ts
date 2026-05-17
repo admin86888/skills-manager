@@ -435,6 +435,17 @@ export interface LogExportResult {
 export const exportLogsZip = () =>
   invoke<LogExportResult>("export_logs_zip");
 
+export interface PanicInfo {
+  timestamp: string;
+  message: string;
+}
+
+export const checkLastPanic = () =>
+  invoke<PanicInfo | null>("check_last_panic");
+
+export const clearLastPanic = () =>
+  invoke<void>("clear_last_panic");
+
 // ── Git Backup ──
 
 export type GitUpstreamHealth =

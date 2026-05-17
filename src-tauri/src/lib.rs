@@ -467,6 +467,8 @@ pub fn run() {
             commands::settings::get_diagnostic_info,
             commands::settings::get_recent_log_excerpt,
             commands::settings::export_logs_zip,
+            commands::settings::check_last_panic,
+            commands::settings::clear_last_panic,
             commands::settings::app_exit,
             commands::settings::hide_to_tray,
             // Git Backup

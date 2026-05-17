@@ -468,6 +468,8 @@
     "exportLogsHint": "把最近日志打包成 zip 保存到下载文件夹",
     "exportLogsDone": "已导出日志（{{count}} 个文件），请把 zip 拖到 GitHub issue 附件区。",
     "exportLogsFailed": "导出日志失败。",
+    "panicBanner": "上次运行 Skills Manager 时发生崩溃（{{time}}）。",
+    "panicDismiss": "忽略",
     "gitBackup": "Git 同步",
     "gitBackupDesc": "将 Skill 库备份到 Git 仓库，支持版本管理和多机同步。",
     "proxyConfig": "网络代理",
