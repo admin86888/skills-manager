@@ -187,6 +187,21 @@ pub fn sync_desired_targets(
                         existing.source_hash.as_deref(),
                         desired.source_hash.as_deref(),
                     ) {
+                        // Surface the Windows fallback case in logs so operators
+                        // can tell when a target is permanently on Copy because
+                        // an earlier symlink_dir() failed (issue #153). Helpful
+                        // when a user later enables Developer Mode and wonders
+                        // why Symlink isn't being re-attempted.
+                        if existing.mode == "copy"
+                            && matches!(desired.mode, sync_engine::SyncMode::Symlink)
+                        {
+                            log::debug!(
+                                "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); trigger a manual resync to retry symlink",
+                                desired.skill_id,
+                                desired.skill_name,
+                                desired.tool
+                            );
+                        }
                         skipped_count += 1;
                         continue;
                     }
@@ -550,6 +565,184 @@ pub fn sync_single_skill_to_tool(
 
     store.insert_target(&target_record).map_err(AppError::db)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod sync_desired_targets_tests {
+    use super::*;
+    use crate::core::central_repo;
+    use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Issue #153 regression: when the existing target was written in
+    /// Copy mode (Windows symlink fallback) but the configured mode is
+    /// Symlink, and the source content hash hasn't changed, the sync
+    /// must be skipped. Prior to the fix the mode-equality guard would
+    /// reject the skip branch and re-attempt the full recursive copy
+    /// every startup.
+    #[test]
+    fn copy_fallback_target_with_matching_hash_is_skipped() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+
+        // Real source dir with one file (the central skill).
+        let source = central_repo::skills_dir().join("skill-a");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "real source").unwrap();
+
+        // Pre-existing target dir with a marker file that would be wiped
+        // by copy_dir_recursive's pre-clean step if a re-sync ran.
+        let target = tmp.path().join("agent-skills").join("skill-a");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("MARKER.txt"), "do not wipe me").unwrap();
+
+        // DB rows: skill content_hash = "h1"; existing target also at "h1",
+        // mode "copy" (i.e. previously fell back from Symlink).
+        let skill = SkillRecord {
+            id: "skill-a".to_string(),
+            name: "skill-a".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(source.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: source.to_string_lossy().to_string(),
+            content_hash: Some("h1".to_string()),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-1".to_string(),
+                skill_id: "skill-a".to_string(),
+                tool: "claude-code".to_string(),
+                target_path: target.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: Some("h1".to_string()),
+            })
+            .unwrap();
+
+        // Desired target: same source/target/hash but Symlink mode
+        // (the configured default that originally fell back to Copy).
+        let desired = vec![ScenarioSyncTarget {
+            skill_id: "skill-a".to_string(),
+            skill_name: "skill-a".to_string(),
+            tool: "claude-code".to_string(),
+            source: source.clone(),
+            target: target.clone(),
+            mode: sync_engine::SyncMode::Symlink,
+            source_hash: Some("h1".to_string()),
+        }];
+
+        sync_desired_targets(&store, &desired).unwrap();
+
+        // The marker file proves no re-sync ran (a real re-sync would
+        // have called copy_dir_recursive after wiping the target).
+        assert!(
+            target.join("MARKER.txt").exists(),
+            "target dir was wiped — skip did not fire"
+        );
+        // The skill's actual SKILL.md should NOT have been copied in,
+        // because we skipped the sync entirely.
+        assert!(
+            !target.join("SKILL.md").exists(),
+            "SKILL.md appeared — sync ran instead of skipping"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    /// Companion: if the target has been manually deleted, even with a
+    /// matching hash, we must NOT skip — the user's agent dir is
+    /// otherwise left broken.
+    #[test]
+    fn deleted_target_with_matching_hash_forces_resync() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+
+        let source = central_repo::skills_dir().join("skill-b");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "real source").unwrap();
+
+        // Target path that does NOT exist on disk.
+        let target = tmp.path().join("agent-skills").join("skill-b");
+
+        let skill = SkillRecord {
+            id: "skill-b".to_string(),
+            name: "skill-b".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(source.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: source.to_string_lossy().to_string(),
+            content_hash: Some("h1".to_string()),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-2".to_string(),
+                skill_id: "skill-b".to_string(),
+                tool: "claude-code".to_string(),
+                target_path: target.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: Some("h1".to_string()),
+            })
+            .unwrap();
+
+        let desired = vec![ScenarioSyncTarget {
+            skill_id: "skill-b".to_string(),
+            skill_name: "skill-b".to_string(),
+            tool: "claude-code".to_string(),
+            source: source.clone(),
+            target: target.clone(),
+            mode: sync_engine::SyncMode::Copy,
+            source_hash: Some("h1".to_string()),
+        }];
+
+        sync_desired_targets(&store, &desired).unwrap();
+
+        // Sync must have run — target should now exist with the source content.
+        assert!(target.join("SKILL.md").exists(), "missing target was not re-synced");
+
+        central_repo::set_test_base_dir_override(None);
+    }
 }
 
 #[cfg(test)]
