@@ -22,10 +22,16 @@ export function Layout() {
         e.preventDefault();
         navigate("/settings");
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r") {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+        e.preventDefault();
+        refreshAppData();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate]);
+  }, [navigate, refreshAppData]);
 
   return (
     <div className="relative flex h-full w-full overflow-hidden bg-background text-primary">

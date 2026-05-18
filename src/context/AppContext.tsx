@@ -59,6 +59,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const autoCheckInFlightRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
+  const lastActivePresetIdRef = useRef<string | null>(null);
 
   const setTranslatedError = useCallback((key: string) => {
     setAppError(i18n.t("common.loadFailed", { item: i18n.t(key) }));
@@ -72,6 +73,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ]);
       setPresets(s);
       setActivePreset(active);
+      const previousActiveId = lastActivePresetIdRef.current;
+      const nextActiveId = active?.id ?? null;
+      if (previousActiveId !== nextActiveId) {
+        lastActivePresetIdRef.current = nextActiveId;
+        // Carry the sidebar along only when the user was viewing the old
+        // active preset — that way an external switch (CLI/tray) follows,
+        // but a user who's browsing some other preset isn't yanked away.
+        // Skip the initial load (previousActiveId === null) entirely so a
+        // persisted viewedPreset from localStorage isn't clobbered.
+        if (nextActiveId && previousActiveId !== null) {
+          setViewedPresetIdState((current) => {
+            if (current !== previousActiveId) return current;
+            try {
+              localStorage.setItem(VIEWED_PRESET_LS_KEY, nextActiveId);
+            } catch {
+              // localStorage may be unavailable; selection is still tracked in memory.
+            }
+            return nextActiveId;
+          });
+        }
+      }
       setAppError(null);
     } catch (e) {
       console.error("Failed to load presets:", e);

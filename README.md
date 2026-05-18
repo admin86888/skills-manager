@@ -159,9 +159,9 @@ npm run cli -- skills search react --limit 5
 npm run cli -- skills remove <ref> --dry-run
 npm run cli -- skills remove <ref> --yes
 
-# Enable / disable (disabled skills are skipped by sync)
-npm run cli -- skills enable <ref>
-npm run cli -- skills disable <ref>
+# Enable / disable skills by changing preset membership
+npm run cli -- presets add-skill <preset> <ref>
+npm run cli -- presets remove-skill <preset> <ref>
 
 # Sync the active preset out to enabled agents
 npm run cli -- skills sync --dry-run

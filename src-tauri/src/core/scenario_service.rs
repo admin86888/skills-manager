@@ -74,9 +74,6 @@ pub fn collect_scenario_sync_targets(
     let mut targets = Vec::new();
 
     for skill in &skills {
-        if !skill.enabled {
-            continue;
-        }
         let source = PathBuf::from(&skill.central_path);
         let target_name = sync_engine::target_dir_name(&source, &skill.name);
         let adapters = enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
@@ -367,6 +364,54 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
     }
 
     sync_scenario_skills(store, &desired_active)
+}
+
+pub fn ensure_cli_scenario_state(store: &SkillStore) -> Result<(), AppError> {
+    let mut scenarios = store.get_all_scenarios().map_err(AppError::db)?;
+    if scenarios.is_empty() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let default_scenario = ScenarioRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Default".to_string(),
+            description: Some("Default startup scenario".to_string()),
+            icon: None,
+            sort_order: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        store.insert_scenario(&default_scenario).map_err(AppError::db)?;
+        scenarios.push(default_scenario);
+    }
+
+    let current_active = store.get_active_scenario_id().map_err(AppError::db)?;
+    if current_active
+        .as_deref()
+        .is_some_and(|id| scenarios.iter().any(|scenario| scenario.id == id))
+    {
+        return Ok(());
+    }
+
+    let preferred_default = store.get_setting("default_scenario").ok().flatten();
+    let desired_active = preferred_default
+        .filter(|id| scenarios.iter().any(|scenario| scenario.id == *id))
+        .unwrap_or_else(|| scenarios[0].id.clone());
+
+    store
+        .set_active_scenario(&desired_active)
+        .map_err(AppError::db)
+}
+
+pub fn restore_all_skills_sync_included(store: &SkillStore) -> Result<bool, AppError> {
+    let mut changed = false;
+    for skill in store.get_all_skills().map_err(AppError::db)? {
+        if !skill.enabled {
+            store
+                .update_skill_enabled(&skill.id, true)
+                .map_err(AppError::db)?;
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 pub fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {

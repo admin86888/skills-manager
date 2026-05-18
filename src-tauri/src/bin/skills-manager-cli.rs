@@ -113,9 +113,11 @@ enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Deprecated no-op: use presets add-skill to enable a skill in a preset.
     Enable {
         references: Vec<String>,
     },
+    /// Deprecated no-op: use presets remove-skill to disable a skill in a preset.
     Disable {
         references: Vec<String>,
     },
@@ -185,7 +187,12 @@ enum PresetCommand {
     Preview {
         reference: String,
     },
+    #[command(alias = "activate", alias = "enable", alias = "start", alias = "open")]
     Apply {
+        reference: String,
+    },
+    #[command(alias = "disable", alias = "stop", alias = "close", alias = "off")]
+    Deactivate {
         reference: String,
     },
     AddSkill {
@@ -312,10 +319,13 @@ struct RemoveReport {
 }
 
 #[derive(Debug, Serialize)]
-struct EnableReport {
+struct DeprecatedEnableReport {
     skill_id: String,
     name: String,
     enabled: bool,
+    changed: bool,
+    deprecated: bool,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -326,6 +336,16 @@ struct SyncReport {
     tool: Option<String>,
     dry_run: bool,
     targets: Vec<scenario_service::SyncPreviewTarget>,
+}
+
+#[derive(Debug, Serialize)]
+struct PresetDeactivateReport {
+    ok: bool,
+    preset_id: String,
+    preset_name: String,
+    removed_target_count: usize,
+    active_preset_id: Option<String>,
+    active_preset_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -421,7 +441,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         central_repo::set_runtime_skills_dir_override(Some(skills_root.clone()));
     }
 
-    let store = app_state::initialize_store()?;
+    let store = app_state::initialize_cli_store()?;
 
     match cli.command {
         Commands::Repo(args) => run_repo(args, &store, cli.json),
@@ -439,12 +459,12 @@ fn run_repo(args: RepoArgs, store: &SkillStore, json: bool) -> anyhow::Result<()
         RepoCommand::Status => print_json(&repo_status(store), json),
         RepoCommand::SetPath { path } => {
             central_repo::set_base_dir_override(Some(path))?;
-            let store = app_state::initialize_store()?;
+            let store = app_state::initialize_cli_store()?;
             print_json(&repo_status(&store), json);
         }
         RepoCommand::ResetPath => {
             central_repo::set_base_dir_override(None)?;
-            let store = app_state::initialize_store()?;
+            let store = app_state::initialize_cli_store()?;
             print_json(&repo_status(&store), json);
         }
     }
@@ -526,11 +546,11 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             print_json(&report, json);
         }
         SkillsCommand::Enable { references } => {
-            let reports = run_set_enabled(store, &references, true)?;
+            let reports = run_deprecated_set_enabled(store, &references, true)?;
             print_json(&reports, json);
         }
         SkillsCommand::Disable { references } => {
-            let reports = run_set_enabled(store, &references, false)?;
+            let reports = run_deprecated_set_enabled(store, &references, false)?;
             print_json(&reports, json);
         }
         SkillsCommand::Sync {
@@ -1092,25 +1112,44 @@ fn run_remove(
 
 // ── enable / disable ──────────────────────────────────────────────────────
 
-fn run_set_enabled(
+fn run_deprecated_set_enabled(
     store: &SkillStore,
     references: &[String],
-    enabled: bool,
-) -> anyhow::Result<Vec<EnableReport>> {
+    requested_enabled: bool,
+) -> anyhow::Result<Vec<DeprecatedEnableReport>> {
     if references.is_empty() {
         bail!("no skill ref provided");
     }
     let mut reports = Vec::new();
     for r in references {
         let skill = resolve_skill(store, r)?;
-        store.update_skill_enabled(&skill.id, enabled)?;
-        reports.push(EnableReport {
+        // `skills enable` repairs legacy enabled=false rows; `skills disable`
+        // is a true no-op. Flipping enabled to true on disable would be the
+        // opposite of what the user asked for.
+        let changed = if requested_enabled && !skill.enabled {
+            store.update_skill_enabled(&skill.id, true)?;
+            true
+        } else {
+            false
+        };
+        let enabled_after = if requested_enabled { true } else { skill.enabled };
+        let message = if requested_enabled {
+            "Deprecated no-op: skills are enabled by adding them to a preset; this command only restores legacy sync inclusion."
+        } else {
+            "Deprecated no-op: skills are disabled by removing them from a preset; this command does not modify the legacy enabled flag."
+        };
+        reports.push(DeprecatedEnableReport {
             skill_id: skill.id,
             name: skill.name,
-            enabled,
+            enabled: enabled_after,
+            changed,
+            deprecated: true,
+            message: message.to_string(),
         });
     }
-    sync_metadata::write_all_from_db(store)?;
+    if reports.iter().any(|report| report.changed) {
+        sync_metadata::write_all_from_db(store)?;
+    }
     Ok(reports)
 }
 
@@ -1522,6 +1561,51 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 .map_err(map_app_err)?;
             print_json(&current_preset(store)?, json);
         }
+        PresetCommand::Deactivate { reference } => {
+            let preset = resolve_scenario(store, &reference)?;
+            let active = store.get_active_scenario_id()?;
+            let is_active = active.as_deref() == Some(preset.id.as_str());
+            let count_before = count_synced_targets_for_preset(store, &preset.id)?;
+
+            if is_active {
+                let next_active = replacement_preset_after_deactivate(store, &preset.id)?;
+                if let Some(next) = next_active.as_ref() {
+                    scenario_service::apply_scenario_to_default(store, &next.id)
+                        .map_err(map_app_err)?;
+                } else {
+                    scenario_service::unsync_scenario_skills(store, &preset.id)
+                        .map_err(map_app_err)?;
+                    store.clear_active_scenario()?;
+                }
+            } else {
+                // Closing a non-active preset still tears down sync targets for
+                // any skills it shares with the active preset. Unsync this
+                // preset first, then re-sync the active preset so the shared
+                // targets are restored.
+                scenario_service::unsync_scenario_skills(store, &preset.id)
+                    .map_err(map_app_err)?;
+                if let Some(active_id) = active.as_deref() {
+                    scenario_service::sync_scenario_skills(store, active_id)
+                        .map_err(map_app_err)?;
+                }
+            }
+
+            let count_after = count_synced_targets_for_preset(store, &preset.id)?;
+            let removed_target_count = count_before.saturating_sub(count_after);
+
+            let active_after = current_preset(store)?;
+            print_json(
+                &PresetDeactivateReport {
+                    ok: true,
+                    preset_id: preset.id,
+                    preset_name: preset.name,
+                    removed_target_count,
+                    active_preset_id: active_after.as_ref().map(|preset| preset.id.clone()),
+                    active_preset_name: active_after.map(|preset| preset.name),
+                },
+                json,
+            );
+        }
         PresetCommand::AddSkill { preset, skills } => {
             let s = resolve_scenario(store, &preset)?;
             let mut added = Vec::new();
@@ -1599,6 +1683,33 @@ fn list_presets(store: &SkillStore) -> anyhow::Result<Vec<PresetInfo>> {
 fn current_preset(store: &SkillStore) -> anyhow::Result<Option<PresetInfo>> {
     let scenarios = list_presets(store)?;
     Ok(scenarios.into_iter().find(|s| s.active))
+}
+
+fn count_synced_targets_for_preset(store: &SkillStore, preset_id: &str) -> anyhow::Result<usize> {
+    let skill_ids = store.get_skill_ids_for_scenario(preset_id)?;
+    let mut count = 0;
+    for skill_id in skill_ids {
+        count += store.get_targets_for_skill(&skill_id)?.len();
+    }
+    Ok(count)
+}
+
+fn replacement_preset_after_deactivate(
+    store: &SkillStore,
+    deactivated_id: &str,
+) -> anyhow::Result<Option<app_lib::core::skill_store::ScenarioRecord>> {
+    let scenarios = store.get_all_scenarios()?;
+    if let Some(default_id) = store.get_setting("default_scenario")? {
+        if default_id != deactivated_id {
+            if let Some(default) = scenarios.iter().find(|scenario| scenario.id == default_id) {
+                return Ok(Some(default.clone()));
+            }
+        }
+    }
+
+    Ok(scenarios
+        .into_iter()
+        .find(|scenario| scenario.id != deactivated_id))
 }
 
 fn resolve_scenario(
