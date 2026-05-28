@@ -232,26 +232,28 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
                 row?.state === "installed" && "border-emerald-500/30 bg-emerald-500/5",
               )}
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-                <span className="min-w-0 flex-1 truncate font-medium text-secondary" title={project.name}>
-                  {project.name}
-                </span>
-                {!row || row.state === "loading" ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-faint" />
-                ) : row.state === "error" ? (
-                  <span
-                    className="shrink-0 text-rose-500"
-                    title={row.error || t("common.error")}
-                  >
-                    {t("common.error")}
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <div className="flex min-w-0 items-center gap-2">
+                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-secondary" title={project.name}>
+                    {project.name}
                   </span>
-                ) : (
-                  <>
-                    <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-                      {activeTargets.length === 0 ? (
-                        <span className="text-[12px] text-muted">{t("addFromLibrary.status.unavailable")}</span>
-                      ) : activeTargets.map((target) => {
+                  {!row || row.state === "loading" ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-faint" />
+                  ) : row.state === "error" ? (
+                    <span
+                      className="shrink-0 text-rose-500"
+                      title={row.error || t("common.error")}
+                    >
+                      {t("common.error")}
+                    </span>
+                  ) : null}
+                </div>
+                {row && row.state !== "loading" && row.state !== "error" && (
+                  <div className="flex min-w-0 flex-wrap justify-end gap-1.5">
+                    {activeTargets.length === 0 ? (
+                      <span className="text-[12px] text-muted">{t("addFromLibrary.status.unavailable")}</span>
+                    ) : activeTargets.map((target) => {
                         const agentState = getAgentState(row, target);
                         const agentPending = pendingKey === `${project.id}:${target.key}`;
                         const label =
@@ -305,7 +307,6 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
                         );
                       })}
                     </div>
-                  </>
                 )}
               </div>
             </div>
