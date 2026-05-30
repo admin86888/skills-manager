@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.4] - 2026-05-30
+
+### Release Overview
+- A fix release that restores the missing delete/manage button after uploading a global-workspace skill to the central library, and makes the "update available" badge agree with what the Diff tab actually shows.
+
+### User-facing
+- **Uploaded skills get their delete button back** — Uploading a skill from the Global Workspace to the central library used to leave the card with no actions at all: the skill was synced but unmanaged, so neither a delete nor a re-upload button appeared. Newly uploaded skills are now registered as managed targets, and a one-time startup repair restores the button for skills that were already stranded by the earlier behavior.
+- **Update badge and diff now agree** — The "update available" badge hashed the whole skill directory, but the Diff tab only compared the main `SKILL.md`, so a change inside `references/`, `scripts/`, an added/removed file, or an exec-bit flip would flag an update yet show an empty diff. The Diff tab now reports per-file changes across the entire skill directory, so the badge and the diff always match.
+
+### Developer & Governance
+- Uploading a local agent skill to the center now reuses the regular `sync_single_skill_to_tool` path so the adopted skill becomes a managed target consistent with every other managed skill; the freshly inserted skill row is rolled back if target registration fails.
+- Added a `backfill_stranded_agent_targets` startup repair that scans each installed, enabled agent for center skills whose `source_ref` points at an agent skills dir but lack a target. It matches strictly by `source_ref` (never content hash, to avoid adopting look-alikes) and only repairs skills the workspace classifies as `in_sync` (since the sync rewrites the agent artifact from central). The pass is idempotent and short-circuits on a cheap pre-check once everything is targeted.
+- Shared one file-enumeration helper (`content_hash::list_content_files`) for both hashing and diffing so their scope can never drift, and added a `get_skill_source_diff` command returning per-file entries (added / removed / modified; text / binary / too_large / permission_only); the Diff tab renders `SkillSourceDiffViewer` per changed file, lazily loaded on open.
+- Documented the macOS 15 Gatekeeper "could not verify this app is free of malware" dialog in the README, with a screenshot and the steps to open the app anyway.
+- CI: skip the rust-cache save step to avoid false-positive failures on Windows release builds.
 ## [1.22.3] - 2026-05-30
 
 ### Release Overview
