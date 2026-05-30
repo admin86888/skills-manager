@@ -824,6 +824,21 @@ pub fn run() {
             );
             startup_timings.log();
 
+            // One-time repair for skills uploaded before sync targets were
+            // registered on import: they have a center record but no target,
+            // leaving them button-less in the workspace. Idempotent and cheap
+            // once repaired.
+            let step = Instant::now();
+            let repaired =
+                commands::agent_workspace::backfill_stranded_agent_targets(&store_for_setup);
+            if repaired > 0 {
+                log::info!(
+                    "startup: backfilled {} stranded agent skill target(s) in {} ms",
+                    repaired,
+                    step.elapsed().as_millis()
+                );
+            }
+
             let step = Instant::now();
             if is_tray_icon_enabled(&store_for_setup) {
                 ensure_tray_icon(app.handle())?;

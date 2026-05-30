@@ -10,6 +10,7 @@ use crate::commands::projects::{
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
     error::AppError, installer, project_scanner, scenario_service, sync_engine, tool_adapters,
+    tool_service,
 };
 
 fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
@@ -320,6 +321,101 @@ fn import_agent_local_skill_to_center(
     Ok(())
 }
 
+/// Repair "stranded" center skills left behind by uploads that predate the
+/// sync-target registration fix. Such a skill has a center record whose
+/// `source_ref` still points at a skill living in an agent's skills directory,
+/// but no `skill_targets` row for that agent — so the global workspace treats
+/// it as in-sync-but-unmanaged and renders no actions (the missing delete
+/// button). Runs once at startup; idempotent (after repair the target exists,
+/// so later runs find nothing and exit on the cheap pre-check).
+///
+/// We match strictly by `source_ref` — the strong "this skill was uploaded
+/// FROM here" signal — never by content hash, which could silently adopt a
+/// look-alike skill the user never uploaded. We also only repair skills whose
+/// on-disk content still equals the center copy (hash match): completing the
+/// registration runs `sync_single_skill_to_tool`, which rewrites the agent
+/// artifact from the central copy, so acting on a diverged skill could clobber
+/// newer local edits. Diverged stranded skills are left for an explicit user
+/// action. Best-effort: per-skill failures are logged and skipped.
+pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let all_targets = store.get_all_targets().unwrap_or_default();
+
+    // Cheap pre-check: a stranded skill carries a `source_ref` but has no target
+    // row at all. When every source_ref-bearing skill is already targeted there
+    // is nothing to repair, so we skip the filesystem scan entirely.
+    let has_candidate = all_managed.iter().any(|managed| {
+        managed.source_ref.as_deref().is_some_and(|s| !s.is_empty())
+            && !all_targets.iter().any(|t| t.skill_id == managed.id)
+    });
+    if !has_candidate {
+        return 0;
+    }
+
+    let disabled = tool_service::get_disabled_tools(store);
+    let mut repaired = 0usize;
+
+    for adapter in tool_adapters::all_tool_adapters(store) {
+        if !adapter.is_installed() || disabled.contains(&adapter.key) {
+            continue;
+        }
+        let targets = store.get_all_targets().unwrap_or_default();
+
+        for skill in read_agent_local_skills(&adapter) {
+            let canonical = std::fs::canonicalize(&skill.path).ok();
+            let Some(matched) = all_managed
+                .iter()
+                .find(|managed| source_ref_matches_skill_path(&skill.path, canonical.as_ref(), managed))
+            else {
+                continue;
+            };
+
+            if targets
+                .iter()
+                .any(|t| t.skill_id == matched.id && t.tool == adapter.key)
+            {
+                continue;
+            }
+
+            // Only safe when the local copy still equals center: the sync below
+            // rewrites the agent artifact from central, so a diverged local would
+            // lose its newer edits. Reuse the workspace's own classifier (which
+            // also recomputes the live center hash when the DB hash is stale) so
+            // we repair exactly the skills the UI shows as in-sync, no more.
+            if classify_sync_status(&skill, Some(matched)) != "in_sync" {
+                log::info!(
+                    "backfill: skipping diverged stranded skill '{}' on agent '{}' (needs manual action)",
+                    matched.name,
+                    adapter.key
+                );
+                continue;
+            }
+
+            match scenario_service::sync_single_skill_to_tool(store, &matched.id, &adapter.key) {
+                Ok(()) => {
+                    repaired += 1;
+                    log::info!(
+                        "backfill: registered missing sync target for stranded skill '{}' on agent '{}'",
+                        matched.name,
+                        adapter.key
+                    );
+                }
+                Err(err) => log::warn!(
+                    "backfill: failed to repair stranded skill '{}' on agent '{}': {}",
+                    matched.name,
+                    adapter.key,
+                    err
+                ),
+            }
+        }
+    }
+
+    if repaired > 0 {
+        log::info!("backfill: repaired {repaired} stranded agent skill target(s)");
+    }
+    repaired
+}
+
 #[tauri::command]
 pub async fn update_global_local_skill_from_center(
     store: State<'_, Arc<SkillStore>>,
@@ -405,8 +501,8 @@ fn delete_agent_local_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        enrich_center_status, import_agent_local_skill_to_center,
-        update_agent_local_skill_from_center,
+        backfill_stranded_agent_targets, enrich_center_status,
+        import_agent_local_skill_to_center, update_agent_local_skill_from_center,
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
@@ -704,6 +800,86 @@ mod tests {
         assert_eq!(targets[0].skill_id, "existing-center");
         assert_eq!(targets[0].tool, "test_agent");
         assert_eq!(targets[0].target_path, skill_dir.to_string_lossy());
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn backfill_registers_target_for_stranded_in_sync_skill() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: local-tool\ndescription: Agent copy\n---\nlocal\n",
+        )
+        .unwrap();
+
+        // A center skill that was uploaded before targets were registered:
+        // source_ref points at the agent dir, content matches, but NO target.
+        let existing = installer::install_from_local(&skill_dir, Some("local-tool")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "stranded".to_string(),
+                name: "local-tool".to_string(),
+                description: existing.description.clone(),
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(existing.content_hash.clone()),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Stranded precondition: no targets at all.
+        assert!(store.get_all_targets().unwrap().is_empty());
+
+        let repaired = backfill_stranded_agent_targets(&store);
+        assert_eq!(repaired, 1);
+
+        let targets = store.get_all_targets().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].skill_id, "stranded");
+        assert_eq!(targets[0].tool, "test_agent");
+        assert_eq!(targets[0].target_path, skill_dir.to_string_lossy());
+
+        // Idempotent: a second run sees the target and repairs nothing.
+        assert_eq!(backfill_stranded_agent_targets(&store), 0);
+        assert_eq!(store.get_all_targets().unwrap().len(), 1);
 
         central_repo::set_test_base_dir_override(None);
     }
