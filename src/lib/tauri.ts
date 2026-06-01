@@ -13,6 +13,7 @@ export interface ToolInfo {
   is_custom: boolean;
   has_path_override: boolean;
   project_relative_skills_dir: string | null;
+  has_project_path_override: boolean;
   category: ToolCategory;
 }
 
@@ -211,6 +212,9 @@ export const setCustomToolProjectPath = (
     key,
     projectRelativeSkillsDir,
   });
+
+export const resetCustomToolProjectPath = (key: string) =>
+  invoke<void>("reset_custom_tool_project_path", { key });
 
 export const addCustomTool = (
   key: string,

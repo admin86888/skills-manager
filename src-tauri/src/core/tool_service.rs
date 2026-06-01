@@ -17,6 +17,7 @@ pub struct ToolInfo {
     pub is_custom: bool,
     pub has_path_override: bool,
     pub project_relative_skills_dir: Option<String>,
+    pub has_project_path_override: bool,
     pub category: ToolCategory,
 }
 
@@ -113,6 +114,21 @@ pub fn set_custom_tool_paths(
         .map_err(AppError::db)
 }
 
+pub fn get_custom_tool_project_paths(store: &SkillStore) -> HashMap<String, String> {
+    tool_adapters::custom_tool_project_paths(store)
+}
+
+pub fn set_custom_tool_project_paths(
+    store: &SkillStore,
+    paths: &HashMap<String, String>,
+) -> Result<(), AppError> {
+    let json = serde_json::to_string(paths)
+        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
+    store
+        .set_setting("custom_tool_project_paths", &json)
+        .map_err(AppError::db)
+}
+
 pub fn get_custom_tools(store: &SkillStore) -> Vec<CustomToolDef> {
     tool_adapters::custom_tools(store)
 }
@@ -177,6 +193,7 @@ pub fn normalize_project_relative_skills_dir_input(path: &str) -> Result<Option<
 
 pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let disabled = disabled_tools_set(store);
+    let project_overrides = get_custom_tool_project_paths(store);
     let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
         .into_iter()
         .map(|adapter| ToolInfo {
@@ -195,6 +212,10 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
                     Some(project_dir.to_string())
                 }
             },
+            // Only built-in adapters have a default project path to reset back to;
+            // custom tools clear their path instead of resetting.
+            has_project_path_override: !adapter.is_custom
+                && project_overrides.contains_key(&adapter.key),
             category: adapter.category,
         })
         .collect();

@@ -759,6 +759,20 @@ pub fn custom_tool_paths(store: &crate::core::skill_store::SkillStore) -> HashMa
         .unwrap_or_default()
 }
 
+/// Read per-tool project-relative skills path overrides for built-in adapters.
+/// Maps tool key -> project-relative path (e.g. `.cursor/skills`). Custom tools
+/// store their project path inside [`CustomToolDef`] instead.
+pub fn custom_tool_project_paths(
+    store: &crate::core::skill_store::SkillStore,
+) -> HashMap<String, String> {
+    store
+        .get_setting("custom_tool_project_paths")
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
 /// Read user-defined custom tools from store.
 pub fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomToolDef> {
     store
@@ -772,6 +786,7 @@ pub fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomT
 /// Returns all tool adapters: built-in (with path overrides applied) + custom tools.
 pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
     let overrides = custom_tool_paths(store);
+    let project_overrides = custom_tool_project_paths(store);
     let customs = custom_tools(store);
 
     let mut adapters: Vec<ToolAdapter> = default_tool_adapters()
@@ -779,6 +794,9 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
         .map(|mut a| {
             if let Some(path) = overrides.get(&a.key) {
                 a.override_skills_dir = Some(path.clone());
+            }
+            if let Some(project_path) = project_overrides.get(&a.key) {
+                a.project_relative_skills_dir = Some(project_path.clone());
             }
             a
         })
@@ -815,6 +833,9 @@ pub fn find_adapter_with_store(
     if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
         if let Some(path) = custom_tool_paths(store).get(key) {
             adapter.override_skills_dir = Some(path.clone());
+        }
+        if let Some(project_path) = custom_tool_project_paths(store).get(key) {
+            adapter.project_relative_skills_dir = Some(project_path.clone());
         }
         return Some(adapter);
     }

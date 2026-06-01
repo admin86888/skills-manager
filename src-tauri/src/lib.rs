@@ -900,6 +900,7 @@ pub fn run() {
             commands::tools::set_custom_tool_path,
             commands::tools::reset_custom_tool_path,
             commands::tools::set_custom_tool_project_path,
+            commands::tools::reset_custom_tool_project_path,
             commands::tools::add_custom_tool,
             commands::tools::remove_custom_tool,
             // Skills

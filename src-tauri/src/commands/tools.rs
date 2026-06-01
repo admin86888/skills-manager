@@ -13,8 +13,9 @@ use crate::core::sync_engine;
 use crate::core::timing::should_log_first_or_slow;
 use crate::core::tool_adapters::{self, CustomToolDef, ToolCategory};
 use crate::core::tool_service::{
-    self, ToolInfo, get_custom_tool_paths, get_custom_tools, get_disabled_tools, get_tool_order,
-    normalize_project_relative_skills_dir_input, normalize_skills_dir_input, set_custom_tool_paths,
+    self, ToolInfo, get_custom_tool_paths, get_custom_tool_project_paths, get_custom_tools,
+    get_disabled_tools, get_tool_order, normalize_project_relative_skills_dir_input,
+    normalize_skills_dir_input, set_custom_tool_paths, set_custom_tool_project_paths,
     set_custom_tools, set_disabled_tools, set_tool_order,
 };
 
@@ -28,6 +29,7 @@ pub struct ToolInfoDto {
     pub is_custom: bool,
     pub has_path_override: bool,
     pub project_relative_skills_dir: Option<String>,
+    pub has_project_path_override: bool,
     pub category: ToolCategory,
 }
 
@@ -76,6 +78,7 @@ pub async fn get_tool_status(
                 is_custom: info.is_custom,
                 has_path_override: info.has_path_override,
                 project_relative_skills_dir: info.project_relative_skills_dir,
+                has_project_path_override: info.has_project_path_override,
                 category: info.category,
             })
             .collect();
@@ -251,13 +254,56 @@ pub async fn set_custom_tool_project_path(
             project_relative_skills_dir.as_deref().unwrap_or_default(),
         )?;
 
+        // Custom tools store the project path on their definition; clearing it
+        // (None) drops project-workspace support for that agent.
         let mut customs = get_custom_tools(&store);
-        let custom = customs
-            .iter_mut()
-            .find(|c| c.key == key)
-            .ok_or_else(|| AppError::not_found(format!("Custom tool not found: {key}")))?;
-        custom.project_relative_skills_dir = normalized;
-        set_custom_tools(&store, &customs)
+        if let Some(custom) = customs.iter_mut().find(|c| c.key == key) {
+            custom.project_relative_skills_dir = normalized;
+            return set_custom_tools(&store, &customs);
+        }
+
+        // Built-in tools keep overrides in a side map keyed by tool key.
+        // Resolve the built-in default project path (no store overrides) to
+        // validate the key and to detect no-op edits: an empty value, or one
+        // equal to the default, removes the override and restores the default.
+        let default_project_path = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .find(|a| a.key == key)
+            .map(|a| a.project_relative_skills_dir().to_string())
+            .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+        let mut project_paths = get_custom_tool_project_paths(&store);
+        match normalized {
+            Some(path) if path != default_project_path => {
+                project_paths.insert(key, path);
+            }
+            _ => {
+                project_paths.remove(&key);
+            }
+        }
+        set_custom_tool_project_paths(&store, &project_paths)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn reset_custom_tool_project_path(
+    key: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = key.trim().to_string();
+        if key.is_empty() {
+            return Err(AppError::invalid_input("Key is required"));
+        }
+        if tool_adapters::find_adapter_with_store(&store, &key).is_none() {
+            return Err(AppError::not_found(format!("Unknown tool: {key}")));
+        }
+        let mut project_paths = get_custom_tool_project_paths(&store);
+        if project_paths.remove(&key).is_some() {
+            set_custom_tool_project_paths(&store, &project_paths)?;
+        }
+        Ok(())
     })
     .await?
 }
