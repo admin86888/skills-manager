@@ -1,0 +1,57 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - '.github/workflows/test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS covers the unix code paths; Windows covers the
+          # cfg(windows) paths (symlink/junction sync, removal).
+          - platform: macos-latest
+            label: macOS
+          - platform: windows-latest
+            label: Windows
+
+    runs-on: ${{ matrix.platform }}
+    name: Rust tests (${{ matrix.label }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+
+      # cargo test needs no frontend build: tauri's generate_context only
+      # reads the config, and beforeBuildCommand applies to `tauri build`.
+      - name: Run tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # vctip.exe (VC++ telemetry) lingers after cl.exe and locks files in
+      # target/, which intermittently breaks the post-job cache save and
+      # marks a green run red (see the save-if note in release.yml). Kill
+      # it before the cache save runs so this job can keep saving caches.
+      - name: Kill VC telemetry before cache save
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: taskkill /f /im vctip.exe
