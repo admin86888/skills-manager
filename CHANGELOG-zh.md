@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.23.1] - 2026-06-10
+
+### 发布概览
+- Windows 链接模式救场版本：当 Windows 阻止创建符号链接时（无管理员权限、未开启开发者模式），skill 现在会以目录联接（junction）方式同步，不再静默退化为全量复制。同时新增 CI 任务，在 macOS 和 Windows 上真正运行 Rust 测试套件。
+
+### 用户可见更新
+- **Windows 上无需开发者模式即可使用符号链接模式** —— 在 Windows 上创建真正的符号链接需要管理员权限或开启开发者模式，因此对大多数用户来说，「符号链接」同步模式实际上一直在静默退化为把每个 skill 完整复制到各个 agent 目录，大体积 skill 会迅速占满磁盘。现在当符号链接创建失败时，Skills Manager 会改为创建目录联接（junction）—— junction 在本地 NTFS 卷上不需要任何特权，并且和符号链接一样与中央库保持实时联动。全量复制仅作为最后兜底保留，例如 WSL 目标路径（`\\wsl.localhost\...`），Windows 用户态无法对其建立链接（#126、#38）。注意：此前已退化为复制的目标不会自动转换，手动触发一次重新同步（或更新该 skill）即可切换为 junction。
+- **Windows 上悬空目录链接现在可以正确移除** —— 删除一个所指源目录已被移除的目录符号链接/junction，此前会静默失败并留下损坏的链接；现在移除操作根据链接自身的元数据判断类型，不再跟随链接解析。
+
+### 开发者与治理更新
+- 新增 `Test` CI workflow：凡涉及 `src-tauri/` 的 push/PR 都会在 macOS 和 Windows 上运行 `cargo test`，`cfg(windows)` 代码路径（符号链接/junction 同步与移除）终于有了自动化覆盖；并通过 `taskkill vctip.exe` 步骤避免 Windows 任务结束时缓存保存间歇性失败。
+- skill 内容哈希在 Windows 上也改用 `/` 作为路径分隔符，相同内容在各平台得到一致的哈希值；Windows 上已存的哈希会在下次同步时重新计算一次。
+- 修复 pull 冲突 git 测试：将裸仓库的初始分支固定为 `main` —— CI runner 没有全局 `init.defaultBranch` 配置，导致克隆出的仓库停在未诞生分支上，该测试在开发机以外的环境必然失败。
 ## [1.23.0] - 2026-06-06
 
 ### 发布概览

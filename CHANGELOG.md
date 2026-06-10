@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.1] - 2026-06-10
+
+### Release Overview
+- A Windows link-mode rescue release: when Windows blocks symlink creation (no admin rights, Developer Mode off), skills now sync as directory junctions instead of silently degrading to full copies. Also adds a CI job that finally runs the Rust test suite on macOS and Windows.
+
+### User-facing
+- **Symlink mode now works on Windows without Developer Mode** — Creating real symlinks on Windows requires admin rights or Developer Mode, so for most users the "symlink" sync mode silently fell back to copying every skill into each agent's folder, ballooning disk usage for large skills. When a symlink cannot be created, Skills Manager now creates a directory junction instead — junctions need no privilege on local NTFS volumes and stay live-linked to the central library exactly like symlinks. Full copy remains only as the last resort, e.g. for WSL targets (`\\wsl.localhost\...`), which Windows cannot link to from user mode (#126, #38). Note: targets that already degraded to copies are not converted automatically — trigger a manual re-sync (or update the skill) to switch them to junctions.
+- **Dangling directory links are now removed correctly on Windows** — Deleting a synced skill whose directory symlink/junction pointed at an already-removed source used to fail silently and leave a broken link behind; removal now classifies links by their own metadata instead of following them.
+
+### Developer & Governance
+- New `Test` CI workflow runs `cargo test` on macOS and Windows for every push/PR touching `src-tauri/`, so `cfg(windows)` code paths (symlink/junction sync, removal) are finally exercised automatically; a `taskkill vctip.exe` step keeps the Windows post-job cache save from flaking.
+- Skill content hashes now use `/` path separators on Windows too, so identical skill content hashes identically across platforms; existing Windows hashes recompute once on next sync.
+- Fixed the pull-conflict git test to pin the bare remote's initial branch to `main` — CI runners have no global `init.defaultBranch`, which left the cloned repo on an unborn branch and broke the test everywhere except dev machines.
 ## [1.23.0] - 2026-06-06
 
 ### Release Overview
