@@ -65,6 +65,7 @@ const IS_WINDOWS = navigator.userAgent.includes("Windows");
 
 const MAINSTREAM_AGENT_KEYS = new Set([
   "claude_code",
+  "omp_agent",
   "cursor",
   "codex",
   "grok",

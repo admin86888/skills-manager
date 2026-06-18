@@ -171,6 +171,19 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            key: "omp_agent".into(),
+            display_name: "OMP Agent".into(),
+            relative_skills_dir: ".omp/agent/skills".into(),
+            relative_detect_dir: ".omp/agent".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+
+        ToolAdapter {
             // Codex CLI reads user-level skills from `~/.codex/skills/` and
             // project-level skills from `<repo>/.codex/skills/`. The shared
             // `~/.agents/skills` location is kept as a discovery fallback so
@@ -798,6 +811,35 @@ pub fn custom_tools(store: &crate::core::skill_store::SkillStore) -> Vec<CustomT
         .unwrap_or_default()
 }
 
+fn apply_builtin_path_overrides(
+    adapter: &mut ToolAdapter,
+    overrides: &HashMap<String, String>,
+    project_overrides: &HashMap<String, String>,
+) {
+    if let Some(path) = overrides.get(&adapter.key) {
+        adapter.override_skills_dir = Some(path.clone());
+    }
+
+    if let Some(project_path) = project_overrides.get(&adapter.key) {
+        adapter.project_relative_skills_dir = Some(project_path.clone());
+    }
+}
+
+fn custom_tool_adapter(ct: CustomToolDef) -> ToolAdapter {
+    ToolAdapter {
+        key: ct.key,
+        display_name: ct.display_name,
+        relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
+        relative_detect_dir: String::new(),
+        additional_scan_dirs: vec![],
+        override_skills_dir: Some(ct.skills_dir),
+        category: ct.category,
+        is_custom: true,
+        recursive_scan: false,
+        project_relative_skills_dir: None,
+    }
+}
+
 /// Returns all tool adapters: built-in (with path overrides applied) + custom tools.
 pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
     let overrides = custom_tool_paths(store);
@@ -806,30 +848,17 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
 
     let mut adapters: Vec<ToolAdapter> = default_tool_adapters()
         .into_iter()
-        .map(|mut a| {
-            if let Some(path) = overrides.get(&a.key) {
-                a.override_skills_dir = Some(path.clone());
-            }
-            if let Some(project_path) = project_overrides.get(&a.key) {
-                a.project_relative_skills_dir = Some(project_path.clone());
-            }
-            a
+        .map(|mut adapter| {
+            apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
+            adapter
         })
         .collect();
 
-    for ct in customs {
-        adapters.push(ToolAdapter {
-            key: ct.key,
-            display_name: ct.display_name,
-            relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
-            relative_detect_dir: String::new(),
-            additional_scan_dirs: vec![],
-            override_skills_dir: Some(ct.skills_dir),
-            category: ct.category,
-            is_custom: true,
-            recursive_scan: false,
-            project_relative_skills_dir: None,
-        });
+    for custom in customs {
+        if adapters.iter().any(|adapter| adapter.key == custom.key) {
+            continue;
+        }
+        adapters.push(custom_tool_adapter(custom));
     }
 
     adapters
@@ -845,31 +874,19 @@ pub fn find_adapter_with_store(
     store: &crate::core::skill_store::SkillStore,
     key: &str,
 ) -> Option<ToolAdapter> {
+    let overrides = custom_tool_paths(store);
+    let project_overrides = custom_tool_project_paths(store);
+    let customs = custom_tools(store);
+
     if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
-        if let Some(path) = custom_tool_paths(store).get(key) {
-            adapter.override_skills_dir = Some(path.clone());
-        }
-        if let Some(project_path) = custom_tool_project_paths(store).get(key) {
-            adapter.project_relative_skills_dir = Some(project_path.clone());
-        }
+        apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
         return Some(adapter);
     }
 
-    custom_tools(store)
+    customs
         .into_iter()
         .find(|ct| ct.key == key)
-        .map(|ct| ToolAdapter {
-            key: ct.key,
-            display_name: ct.display_name,
-            relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
-            relative_detect_dir: String::new(),
-            additional_scan_dirs: vec![],
-            override_skills_dir: Some(ct.skills_dir),
-            category: ct.category,
-            is_custom: true,
-            recursive_scan: false,
-            project_relative_skills_dir: None,
-        })
+        .map(custom_tool_adapter)
 }
 
 /// Returns adapters that are installed and not in the disabled list.
@@ -890,7 +907,13 @@ pub fn enabled_installed_adapters(
 
 #[cfg(test)]
 mod tests {
-    use super::default_tool_adapters;
+    use super::{
+        CustomToolDef, ToolCategory, all_tool_adapters, default_tool_adapters,
+        find_adapter_with_store,
+    };
+    use crate::core::skill_store::SkillStore;
+
+    use tempfile::tempdir;
 
     #[test]
     fn antigravity_uses_current_default_skills_path() {
@@ -910,6 +933,84 @@ mod tests {
             .expect("claude_code adapter should exist");
 
         assert!(adapter.additional_scan_dirs.is_empty());
+    }
+
+    #[test]
+    fn omp_agent_uses_expected_default_paths() {
+        let adapter = default_tool_adapters()
+            .into_iter()
+            .find(|adapter| adapter.key == "omp_agent")
+            .expect("omp_agent adapter should exist");
+
+        assert_eq!(adapter.display_name, "OMP Agent");
+        assert_eq!(adapter.relative_skills_dir, ".omp/agent/skills");
+        assert_eq!(adapter.relative_detect_dir, ".omp/agent");
+        assert!(adapter.additional_scan_dirs.is_empty());
+        assert_eq!(adapter.category, ToolCategory::Coding);
+        assert!(!adapter.is_custom);
+        assert!(!adapter.recursive_scan);
+        assert!(adapter.project_relative_skills_dir.is_none());
+        assert_eq!(adapter.project_relative_skills_dir(), ".omp/agent/skills");
+    }
+
+    #[test]
+    fn custom_omp_agent_collision_keeps_builtin_adapter() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let custom_skills = tmp.path().join("custom-skills");
+        let custom_project_path = ".custom/skills";
+        let custom_tools = vec![
+            CustomToolDef {
+                key: "omp_agent".to_string(),
+                display_name: "Legacy Custom OMP".to_string(),
+                skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
+                project_relative_skills_dir: Some(".legacy/skills".to_string()),
+                category: ToolCategory::Lobster,
+            },
+            CustomToolDef {
+                key: "custom_agent".to_string(),
+                display_name: "Custom Agent".to_string(),
+                skills_dir: custom_skills.to_string_lossy().into_owned(),
+                project_relative_skills_dir: Some(custom_project_path.to_string()),
+                category: ToolCategory::Lobster,
+            },
+        ];
+        store
+            .set_setting("custom_tools", &serde_json::to_string(&custom_tools).unwrap())
+            .unwrap();
+
+        let adapters = all_tool_adapters(&store);
+        let matching_adapters: Vec<_> = adapters
+            .iter()
+            .filter(|adapter| adapter.key == "omp_agent")
+            .collect();
+        assert_eq!(matching_adapters.len(), 1);
+
+        let adapter = matching_adapters[0];
+        assert_eq!(adapter.display_name, "OMP Agent");
+        assert!(!adapter.is_custom);
+        assert_eq!(adapter.category, ToolCategory::Coding);
+        assert_eq!(adapter.relative_skills_dir, ".omp/agent/skills");
+        assert_eq!(adapter.relative_detect_dir, ".omp/agent");
+        assert_eq!(adapter.project_relative_skills_dir(), ".omp/agent/skills");
+
+        let custom_adapter = adapters
+            .iter()
+            .find(|adapter| adapter.key == "custom_agent")
+            .unwrap();
+        assert_eq!(custom_adapter.display_name, "Custom Agent");
+        assert!(custom_adapter.is_custom);
+        assert_eq!(custom_adapter.category, ToolCategory::Lobster);
+        assert_eq!(custom_adapter.skills_dir(), custom_skills);
+        assert_eq!(custom_adapter.project_relative_skills_dir(), custom_project_path);
+
+        let found = find_adapter_with_store(&store, "omp_agent").unwrap();
+        assert_eq!(found.display_name, "OMP Agent");
+        assert!(!found.is_custom);
+        assert_eq!(found.category, ToolCategory::Coding);
+        assert_eq!(found.relative_skills_dir, ".omp/agent/skills");
+        assert_eq!(found.relative_detect_dir, ".omp/agent");
+        assert_eq!(found.project_relative_skills_dir(), ".omp/agent/skills");
     }
 
     #[test]

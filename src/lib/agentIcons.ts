@@ -32,6 +32,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   mux: "mux.png",
   neovate: "neovate.png",
   openclaw: "openclaw.svg",
+  omp_agent: "oh_my_pi.svg",
   opencode: "opencode.png",
   openhands: "openhands.png",
   pi: "pi.svg",
