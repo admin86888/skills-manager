@@ -206,6 +206,12 @@ enum PresetCommand {
         #[arg(long)]
         icon: Option<String>,
     },
+    /// Delete a preset by id or name (use "current" for the active one).
+    #[command(alias = "remove", alias = "rm")]
+    Delete {
+        /// Preset id, name, or "current".
+        reference: String,
+    },
     AddSkill {
         preset: String,
         skills: Vec<String>,
@@ -355,6 +361,16 @@ struct PresetDeactivateReport {
     preset_id: String,
     preset_name: String,
     removed_target_count: usize,
+    active_preset_id: Option<String>,
+    active_preset_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PresetDeleteReport {
+    ok: bool,
+    deleted_id: String,
+    deleted_name: String,
+    was_active: bool,
     active_preset_id: Option<String>,
     active_preset_name: Option<String>,
 }
@@ -1639,6 +1655,39 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 active: false,
             };
             print_json(&info, json);
+        }
+        PresetCommand::Delete { reference } => {
+            let preset = resolve_scenario(store, &reference)?;
+            let was_active =
+                scenario_service::delete_preset(store, &preset.id).map_err(map_app_err)?;
+
+            // Bin-layer orchestration: if we just deleted the active preset,
+            // pick a replacement (same strategy as `deactivate`) and sync it
+            // so disk state matches the new active selection.
+            let active_after = if was_active {
+                match replacement_preset_after_deactivate(store, &preset.id)? {
+                    Some(next) => {
+                        scenario_service::apply_scenario_to_default(store, &next.id)
+                            .map_err(map_app_err)?;
+                        current_preset(store)?
+                    }
+                    None => None,
+                }
+            } else {
+                current_preset(store)?
+            };
+
+            print_json(
+                &PresetDeleteReport {
+                    ok: true,
+                    deleted_id: preset.id,
+                    deleted_name: preset.name,
+                    was_active,
+                    active_preset_id: active_after.as_ref().map(|p| p.id.clone()),
+                    active_preset_name: active_after.map(|p| p.name),
+                },
+                json,
+            );
         }
         PresetCommand::AddSkill { preset, skills } => {
             let s = resolve_scenario(store, &preset)?;

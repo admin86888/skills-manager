@@ -81,6 +81,42 @@ pub fn create_preset_no_activate(
     Ok(record)
 }
 
+/// Delete a preset, returning whether it was the currently active one.
+///
+/// Mirrors the data-layer half of the GUI `delete_preset`
+/// (commands/presets.rs): if the preset was active, its synced targets are
+/// torn down first (so no orphan sync files survive the delete); then the
+/// scenario row is removed and sync metadata flushed. DB-level
+/// `ON DELETE CASCADE` (FK enabled via `PRAGMA foreign_keys=ON`) clears
+/// `scenario_skills` / `scenario_skill_tools`, and `ON DELETE SET NULL`
+/// nulls the `active_scenario` pointer — so callers can rely on the active
+/// id becoming `None` when the active preset is deleted.
+///
+/// Selecting and syncing a replacement active preset is intentionally left
+/// to the caller (the CLI bin layer uses `replacement_preset_after_deactivate`
+/// to stay consistent with `presets deactivate`).
+pub fn delete_preset(store: &SkillStore, id: &str) -> Result<bool, AppError> {
+    ensure_scenario_exists(store, id)?;
+
+    let was_active = store
+        .get_active_scenario_id()
+        .map_err(AppError::db)?
+        .as_deref()
+        == Some(id);
+
+    if was_active {
+        unsync_scenario_skills(store, id)?;
+    }
+
+    sync_metadata::with_repo_lock("delete scenario", || {
+        store.delete_scenario(id)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
+
+    Ok(was_active)
+}
+
 pub fn enabled_installed_adapters_for_scenario_skill(
     store: &SkillStore,
     scenario_id: &str,
@@ -1098,5 +1134,101 @@ mod create_preset_tests {
         assert_eq!(record.name, "Bare");
         assert!(record.description.is_none());
         assert!(record.icon.is_none());
+    }
+}
+
+#[cfg(test)]
+mod delete_preset_tests {
+    use super::{create_preset_no_activate, delete_preset};
+    use crate::core::{central_repo, skill_store::SkillStore, sync_metadata};
+    use std::sync::MutexGuard;
+    use tempfile::{TempDir, tempdir};
+
+    struct TestRepo {
+        _lock: MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        store: SkillStore,
+    }
+
+    impl Drop for TestRepo {
+        fn drop(&mut self) {
+            central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    fn test_repo() -> TestRepo {
+        let lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        std::fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+        TestRepo {
+            _lock: lock,
+            _tmp: tmp,
+            store,
+        }
+    }
+
+    /// The deleted preset's metadata file must be gone after delete.
+    fn scenario_meta_exists(id: &str) -> bool {
+        sync_metadata::metadata_dir()
+            .join("scenarios")
+            .join(format!("{id}.json"))
+            .exists()
+    }
+
+    #[test]
+    fn delete_inactive_preset_clears_db_and_metadata() {
+        let repo = test_repo();
+        let store = &repo.store;
+        let record = create_preset_no_activate(store, "Tmp", None, None).unwrap();
+        assert!(scenario_meta_exists(&record.id));
+
+        let was_active = delete_preset(store, &record.id).expect("delete succeeds");
+
+        // Created via create_preset_no_activate → never activated.
+        assert!(!was_active);
+        assert!(
+            store.get_all_scenarios().unwrap().iter().all(|s| s.id != record.id),
+            "deleted preset must not remain in DB"
+        );
+        assert!(
+            !scenario_meta_exists(&record.id),
+            "deleted preset metadata file must be removed"
+        );
+    }
+
+    #[test]
+    fn delete_active_preset_reports_was_active_and_clears_active() {
+        let repo = test_repo();
+        let store = &repo.store;
+        let record = create_preset_no_activate(store, "Active", None, None).unwrap();
+        // Promote to active manually — core delete only unsyncs/deletes; the
+        // active-switch orchestration lives in the CLI bin layer.
+        store.set_active_scenario(&record.id).unwrap();
+        assert_eq!(
+            store.get_active_scenario_id().unwrap().as_deref(),
+            Some(record.id.as_str())
+        );
+
+        let was_active = delete_preset(store, &record.id).expect("delete succeeds");
+
+        assert!(was_active, "deleting the active preset must report was_active");
+        // core delete clears the now-dangling active pointer (ON DELETE SET NULL
+        // at the DB level + we explicitly clear to keep state consistent for the
+        // bin layer to then set a replacement).
+        assert!(
+            store.get_active_scenario_id().unwrap().is_none(),
+            "active pointer must be cleared after deleting the active preset"
+        );
+        assert!(!scenario_meta_exists(&record.id));
+    }
+
+    #[test]
+    fn delete_unknown_preset_errors() {
+        let repo = test_repo();
+        let err = delete_preset(&repo.store, "does-not-exist");
+        assert!(err.is_err(), "deleting a missing preset must error");
     }
 }

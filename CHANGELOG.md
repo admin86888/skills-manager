@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Developer & Governance
 - **CLI: `presets create` subcommand** — The `skills-manager-cli` Rust CLI can now create presets: `presets create <NAME> [--description <D>] [--icon <KEY>]`. Unlike the GUI's `create_preset`, the CLI variant is side-effect-free — it inserts the preset and persists sync metadata without activating it or disturbing the currently active preset's synced targets. Activate the new preset explicitly with `presets apply <reference>`. Backed by a new `scenario_service::create_preset_no_activate` core function with unit tests covering the no-activate guarantee and metadata flush.
+- **CLI: `presets delete` subcommand** — The CLI can now delete presets by id, name, or `current`: `presets delete <reference>` (aliases: `remove`, `rm`). Deleting the active preset tears down its synced targets first, then activates a replacement using the same strategy as `presets deactivate` (prefers the configured default, else the first remaining). Backed by a new `scenario_service::delete_preset` core function; DB-level `ON DELETE CASCADE` clears memberships and `ON DELETE SET NULL` nulls the active pointer, so no orphaned sync metadata survives. Unit tests cover inactive delete, active delete, and the not-found case.
 
 ## [1.25.0] - 2026-06-19
 

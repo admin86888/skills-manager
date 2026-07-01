@@ -9,6 +9,7 @@
 
 ### 开发者与治理
 - **CLI：`presets create` 子命令** — Rust CLI `skills-manager-cli` 现可创建 preset：`presets create <名称> [--description <描述>] [--icon <图标>]`。与 GUI 的 `create_preset` 不同，CLI 版本无副作用——仅插入 preset 并持久化 sync metadata，不会激活它，也不会扰动当前 active preset 已同步的目标。激活新 preset 请显式执行 `presets apply <引用>`。底层为新增的 `scenario_service::create_preset_no_activate` 核心函数，并附带单元测试覆盖"不改变 active"保证与 metadata 落盘。
+- **CLI：`presets delete` 子命令** — CLI 现可按 id、名称或 `current` 删除 preset：`presets delete <引用>`（别名：`remove`、`rm`）。删除活跃 preset 时会先撤除其同步目标，再用与 `presets deactivate` 相同的策略激活替代项（优先配置的 default，否则剩余第一个）。底层为新增的 `scenario_service::delete_preset` 核心函数；DB 层 `ON DELETE CASCADE` 清理成员关系，`ON DELETE SET NULL` 置空 active 指针，不会遗留孤儿 sync metadata。单元测试覆盖非活跃删除、活跃删除及未找到场景。
 
 ## [1.25.0] - 2026-06-19
 
