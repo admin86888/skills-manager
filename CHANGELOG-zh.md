@@ -5,6 +5,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 开发者与治理
+- **CLI：`presets create` 子命令** — Rust CLI `skills-manager-cli` 现可创建 preset：`presets create <名称> [--description <描述>] [--icon <图标>]`。与 GUI 的 `create_preset` 不同，CLI 版本无副作用——仅插入 preset 并持久化 sync metadata，不会激活它，也不会扰动当前 active preset 已同步的目标。激活新 preset 请显式执行 `presets apply <引用>`。底层为新增的 `scenario_service::create_preset_no_activate` 核心函数，并附带单元测试覆盖"不改变 active"保证与 metadata 落盘。
+
 ## [1.25.0] - 2026-06-19
 
 ### 发布概览

@@ -6,7 +6,7 @@ use std::time::Instant;
 use super::{
     error::AppError,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters,
+    sync_engine, sync_metadata, tool_adapters,
     tool_service,
 };
 
@@ -44,6 +44,41 @@ pub fn ensure_scenario_exists(store: &SkillStore, scenario_id: &str) -> Result<(
         return Err(AppError::not_found("Scenario not found"));
     }
     Ok(())
+}
+
+/// Create an empty preset without activating it or touching sync state.
+///
+/// Mirrors the GUI `create_preset` (commands/presets.rs) minus its
+/// activate/unsync side effects: the CLI keeps `create` side-effect-free so
+/// the caller's currently active preset and synced targets are never
+/// disturbed. Activation is an explicit `presets apply <reference>` step.
+///
+/// `sort_order` defaults to 999 so new presets sort last, matching the GUI.
+pub fn create_preset_no_activate(
+    store: &SkillStore,
+    name: &str,
+    description: Option<&str>,
+    icon: Option<&str>,
+) -> Result<ScenarioRecord, AppError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let id = uuid::Uuid::new_v4().to_string();
+    let record = ScenarioRecord {
+        id: id.clone(),
+        name: name.to_string(),
+        description: description.map(String::from),
+        icon: icon.map(String::from),
+        sort_order: 999,
+        created_at: now,
+        updated_at: now,
+    };
+
+    super::sync_metadata::with_repo_lock("create scenario", || {
+        store.insert_scenario(&record)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
+
+    Ok(record)
 }
 
 pub fn enabled_installed_adapters_for_scenario_skill(
@@ -975,5 +1010,93 @@ mod skip_check_mode_tests {
     fn unknown_existing_mode_is_incompatible() {
         assert!(skip_check_mode("garbage", SyncMode::Symlink).is_none());
         assert!(skip_check_mode("", SyncMode::Copy).is_none());
+    }
+}
+
+#[cfg(test)]
+mod create_preset_tests {
+    use super::create_preset_no_activate;
+    use crate::core::{central_repo, skill_store::SkillStore, sync_metadata};
+    use std::sync::MutexGuard;
+    use tempfile::{TempDir, tempdir};
+
+    /// Isolated central repo + DB, mirroring sync_metadata::tests::test_repo.
+    struct TestRepo {
+        _lock: MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        store: SkillStore,
+    }
+
+    impl Drop for TestRepo {
+        fn drop(&mut self) {
+            central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    fn test_repo() -> TestRepo {
+        let lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        std::fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+        TestRepo {
+            _lock: lock,
+            _tmp: tmp,
+            store,
+        }
+    }
+
+    #[test]
+    fn creates_empty_preset_without_changing_active() {
+        let repo = test_repo();
+        let store = &repo.store;
+        let active_before = store.get_active_scenario_id().unwrap();
+
+        let record = create_preset_no_activate(store, "Dev", Some("daily dev"), Some("code-2"))
+            .expect("create should succeed");
+
+        // Record reflects the inputs.
+        assert_eq!(record.name, "Dev");
+        assert_eq!(record.description.as_deref(), Some("daily dev"));
+        assert_eq!(record.icon.as_deref(), Some("code-2"));
+        assert_eq!(record.sort_order, 999);
+
+        // Persisted in the DB with zero skills.
+        let scenarios = store.get_all_scenarios().unwrap();
+        let saved = scenarios
+            .iter()
+            .find(|s| s.id == record.id)
+            .expect("new preset persisted");
+        assert_eq!(saved.name, "Dev");
+        assert_eq!(
+            store.count_skills_for_scenario(&record.id).unwrap(),
+            0
+        );
+
+        // Decision 1: active preset is NOT touched by create.
+        assert_eq!(
+            store.get_active_scenario_id().unwrap(),
+            active_before,
+            "create must not change the active preset"
+        );
+
+        // sync_metadata flushed the scenario to disk.
+        let scenario_meta = sync_metadata::metadata_dir().join("scenarios");
+        let persisted_file = scenario_meta.join(format!("{}.json", record.id));
+        assert!(
+            persisted_file.exists(),
+            "scenario metadata file should be written"
+        );
+    }
+
+    #[test]
+    fn create_works_with_minimal_fields() {
+        let repo = test_repo();
+        let record =
+            create_preset_no_activate(&repo.store, "Bare", None, None).expect("create succeeds");
+        assert_eq!(record.name, "Bare");
+        assert!(record.description.is_none());
+        assert!(record.icon.is_none());
     }
 }

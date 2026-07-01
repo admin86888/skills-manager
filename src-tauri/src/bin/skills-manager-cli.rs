@@ -195,6 +195,17 @@ enum PresetCommand {
     Deactivate {
         reference: String,
     },
+    /// Create a new empty preset (not activated; use `apply` to activate it).
+    Create {
+        /// Preset display name.
+        name: String,
+        /// Optional description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Optional icon key (e.g. briefcase, code-2, rocket). See presetIcons.tsx.
+        #[arg(long)]
+        icon: Option<String>,
+    },
     AddSkill {
         preset: String,
         skills: Vec<String>,
@@ -1605,6 +1616,29 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 },
                 json,
             );
+        }
+        PresetCommand::Create {
+            name,
+            description,
+            icon,
+        } => {
+            let record = scenario_service::create_preset_no_activate(
+                store,
+                &name,
+                description.as_deref(),
+                icon.as_deref(),
+            )
+            .map_err(map_app_err)?;
+            let info = PresetInfo {
+                id: record.id,
+                name: record.name,
+                description: record.description,
+                icon: record.icon,
+                sort_order: record.sort_order,
+                skill_count: 0,
+                active: false,
+            };
+            print_json(&info, json);
         }
         PresetCommand::AddSkill { preset, skills } => {
             let s = resolve_scenario(store, &preset)?;
