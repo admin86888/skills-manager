@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.1] - 2026-07-03
+
+### Release Overview
+- A backup-trust patch: sync status no longer misreports "central is newer" after a restart, and the Git backup remote can now actually be disconnected.
+
+### User-facing
+- **Sync status stays consistent across restarts** — Uploading a skill to the central library and restarting the app no longer flips the project-workspace status from "in sync" to "central is newer". Reindexing now preserves a skill's timestamp when its content is unchanged (#244).
+- **Disconnect Git backup** — Settings → Git Sync Configuration now has a Disconnect button that removes the remote configuration from this machine; local skills and the remote repository are kept. Previously a cleared remote URL always reappeared on reopen because the UI backfilled it from `.git/config` — the saved setting is now the single source of truth (#260, also resolves the "cannot reset configuration" part of #108).
+- **Copy consistency** — Backup-related copy now consistently refers to the "Library" page (previously "My Skills").
+
+### Developer & Governance
+- New `git_backup_remove_remote` Tauri command: idempotently removes the git origin and clears the saved remote URL setting, so a retry after a partial disconnect converges.
+- Two new unit tests cover the disconnect path (origin removal is idempotent; succeeds on a non-repo directory).
+
 ## [1.25.0] - 2026-06-19
 
 ### Release Overview
