@@ -5,6 +5,7 @@ use std::process::Command;
 
 use super::git2_engine;
 use super::git_credentials;
+use super::merge::protocol;
 use super::repo_lock::RepoLock;
 
 /// Create a `Command` for git that hides the console window on Windows.
@@ -288,12 +289,17 @@ pub(crate) fn init_repo_unlocked(skills_dir: &Path, device_name: &str) -> Result
     configure_device_identity(skills_dir, device_name)?;
 
     ensure_gitignore(skills_dir)?;
+    protocol::ensure_protocol_file(skills_dir)?;
 
     // Initial commit
     run_git_checked(skills_dir, &["add", "-A"])?;
     run_git_checked(
         skills_dir,
-        &["commit", "-m", "Initial skill library snapshot"],
+        &[
+            "commit",
+            "-m",
+            &protocol::app_commit_message("Initial skill library snapshot"),
+        ],
     )?;
 
     log::info!("git init: initialized repository on branch main");
@@ -429,6 +435,9 @@ pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
 pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_gitignore(skills_dir)?;
+    // app_commit (§6): protocol marker is sticky in the tree and the message
+    // carries the protocol trailer.
+    protocol::ensure_protocol_file(skills_dir)?;
 
     run_git_checked(skills_dir, &["add", "-A"])?;
 
@@ -439,8 +448,24 @@ pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()
         anyhow::bail!("Nothing to commit");
     }
 
-    run_git_checked(skills_dir, &["commit", "-m", message])?;
+    run_git_checked(
+        skills_dir,
+        &["commit", "-m", &protocol::app_commit_message(message)],
+    )?;
     log::info!("git commit: committed staged changes");
+    Ok(())
+}
+
+/// Commit for a conflict resolution (merge-engine design §4): the message
+/// arrives with its trailers already built (protocol + Resolved), and the
+/// commit may be empty — "keep local" changes nothing in the tree yet must
+/// still record the resolution for other devices.
+pub(crate) fn commit_resolution_unlocked(skills_dir: &Path, full_message: &str) -> Result<()> {
+    ensure_repo(skills_dir)?;
+    ensure_gitignore(skills_dir)?;
+    protocol::ensure_protocol_file(skills_dir)?;
+    run_git_checked(skills_dir, &["add", "-A"])?;
+    run_git_checked(skills_dir, &["commit", "--allow-empty", "-m", full_message])?;
     Ok(())
 }
 
@@ -586,16 +611,33 @@ pub fn pull(skills_dir: &Path) -> Result<()> {
 pub(crate) fn pull_unlocked(skills_dir: &Path) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_no_interrupted_git_operation(skills_dir)?;
-    let branch = run_git(skills_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|_| "main".to_string());
+    let branch = current_branch(skills_dir);
     log::info!("git pull: fetch + merge origin/{branch}");
+    fetch_branch(skills_dir, &branch)?;
+    merge_branch_system(skills_dir, &branch)?;
+    log::info!("git pull: done");
+    Ok(())
+}
 
+pub(crate) fn current_branch(skills_dir: &Path) -> String {
+    run_git(skills_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "main".to_string())
+}
+
+/// Fetch one branch from origin through whichever network engine applies.
+pub(crate) fn fetch_branch(skills_dir: &Path, branch: &str) -> Result<()> {
     if let Some(url) = raw_remote_url(skills_dir).filter(|u| git2_engine::applies_to(u)) {
-        git2_engine::fetch(skills_dir, Some(&branch), &url)?;
+        git2_engine::fetch(skills_dir, Some(branch), &url)
     } else {
         let env = remote_credential_env(skills_dir);
-        run_git_env_checked(skills_dir, &["fetch", "origin", &branch], &env)?;
+        run_git_env_checked(skills_dir, &["fetch", "origin", branch], &env)
     }
+}
+
+/// Line-level merge of the already-fetched remote branch via system git —
+/// the pre-object-merge behavior, still used by default and as the legacy
+/// fallback of the object engine (merge-engine design §6).
+pub(crate) fn merge_branch_system(skills_dir: &Path, branch: &str) -> Result<()> {
     if let Err(e) = run_git(skills_dir, &["merge", &format!("origin/{branch}")]) {
         // A failed merge — almost always a content conflict on a SKILL.md body
         // edited on two machines — leaves the working tree conflicted with
@@ -607,7 +649,6 @@ pub(crate) fn pull_unlocked(skills_dir: &Path) -> Result<()> {
         let _ = run_git(skills_dir, &["merge", "--abort"]);
         anyhow::bail!("SYNC_CONFLICT: local and remote skill changes conflict ({e})");
     }
-    log::info!("git pull: done");
     Ok(())
 }
 
@@ -733,9 +774,7 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
     // to from the backup history. This is what makes restore always undoable.
     let status = run_git(skills_dir, &["status", "--porcelain"])?;
     if !status.is_empty() {
-        ensure_gitignore(skills_dir)?;
-        run_git_checked(skills_dir, &["add", "-A"])?;
-        run_git_checked(skills_dir, &["commit", "-m", "backup before restore"])?;
+        commit_all_unlocked(skills_dir, "backup before restore")?;
     }
     let safety_tag = create_snapshot_tag_unlocked(skills_dir)?;
 
@@ -744,6 +783,11 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
         // then commit as a forward change.
         run_git_checked(skills_dir, &["read-tree", "--reset", "-u", tag])?;
 
+        // Sticky protocol marker (§6): a pre-protocol snapshot self-heals on
+        // the restore commit instead of resurrecting a marker-less tree.
+        protocol::ensure_protocol_file(skills_dir)?;
+        run_git_checked(skills_dir, &["add", "-A"])?;
+
         let changed = run_git(skills_dir, &["status", "--porcelain"])?;
         if !changed.is_empty() {
             run_git_checked(
@@ -751,7 +795,10 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
                 &[
                     "commit",
                     "-m",
-                    &format!("restore: switch skills library to {}", tag),
+                    &protocol::app_commit_message(&format!(
+                        "restore: switch skills library to {}",
+                        tag
+                    )),
                 ],
             )?;
         }
@@ -1403,6 +1450,72 @@ mod tests {
             run_git(tmp.path(), &["config", "--local", "--get", "user.name"]).unwrap(),
             "Device A"
         );
+    }
+
+    // ── app_commit protocol markers (§6) ──
+
+    #[test]
+    fn app_commits_carry_protocol_marker_and_trailer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // init: initial commit has protocol.json in tree + trailer in message.
+        init_repo_unlocked(dir, "Device A").unwrap();
+        let body = run_git(dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(protocol::has_protocol_trailer(&body), "init: {body}");
+        run_git(dir, &["cat-file", "-e", "HEAD:.skills-manager/protocol.json"]).unwrap();
+
+        // A pre-protocol snapshot: simulate by committing a tree with the
+        // marker removed, tagging it, then restoring it.
+        let snapshot_tag = create_snapshot_tag_unlocked(dir).unwrap();
+        std::fs::write(dir.join("note.md"), "x").unwrap();
+        commit_all_unlocked(dir, "backup").unwrap();
+        let body = run_git(dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(protocol::has_protocol_trailer(&body), "commit_all: {body}");
+
+        // Restore an old snapshot (which does carry protocol.json since init
+        // wrote it) — restore commit must carry the trailer too.
+        let safety = restore_snapshot_version_unlocked(dir, &snapshot_tag).unwrap();
+        assert!(safety.starts_with("sm-v-"));
+        let body = run_git(dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(protocol::has_protocol_trailer(&body), "restore: {body}");
+        run_git(dir, &["cat-file", "-e", "HEAD:.skills-manager/protocol.json"]).unwrap();
+    }
+
+    #[test]
+    fn restore_of_pre_protocol_snapshot_self_heals_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Build a repo whose first snapshot predates the protocol marker.
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.email=t@e.c", "-c", "user.name=T"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-b", "main"]);
+        std::fs::create_dir_all(dir.join("skill-a")).unwrap();
+        std::fs::write(dir.join("skill-a/SKILL.md"), "v1").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "pre-protocol"]);
+        let old_tag = create_snapshot_tag_unlocked(dir).unwrap();
+
+        // A protocol-era commit follows.
+        std::fs::write(dir.join("skill-a/SKILL.md"), "v2").unwrap();
+        commit_all_unlocked(dir, "backup").unwrap();
+        run_git(dir, &["cat-file", "-e", "HEAD:.skills-manager/protocol.json"]).unwrap();
+
+        // Restoring the pre-protocol snapshot must not resurrect a
+        // marker-less tree: the restore commit re-adds protocol.json (sticky).
+        restore_snapshot_version_unlocked(dir, &old_tag).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("skill-a/SKILL.md")).unwrap(), "v1");
+        run_git(dir, &["cat-file", "-e", "HEAD:.skills-manager/protocol.json"]).unwrap();
+        let body = run_git(dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(protocol::has_protocol_trailer(&body), "restore: {body}");
     }
 
     // ── parse_restored_from_tag_message ──

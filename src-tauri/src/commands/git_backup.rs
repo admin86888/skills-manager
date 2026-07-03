@@ -1,6 +1,6 @@
 use crate::core::{
     central_repo, error::AppError, git2_engine, git_backup, git_credentials, git_fetcher,
-    github_api, skill_metadata, sync_metadata,
+    github_api, merge, skill_metadata, sync_metadata,
 };
 use anyhow::Context;
 use std::path::Path;
@@ -361,7 +361,9 @@ pub async fn git_backup_push(store: State<'_, Arc<SkillStore>>) -> Result<(), Ap
 }
 
 #[tauri::command]
-pub async fn git_backup_pull(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
+pub async fn git_backup_pull(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<merge::MergeSummary, AppError> {
     let store = store.inner().clone();
     sync_engine_pref(&store);
     let skills_dir = central_repo::skills_dir();
@@ -369,8 +371,75 @@ pub async fn git_backup_pull(store: State<'_, Arc<SkillStore>>) -> Result<(), Ap
         git_backup::with_repo_lock("git pull", || {
             // Merge commits must carry this device's identity too.
             apply_device_identity(&store, &skills_dir);
-            git_backup::pull_unlocked(&skills_dir)?;
-            reconcile_skills_index_unlocked(&store)
+            let summary = if merge::object_merge_enabled(&store) {
+                // Experimental object merge (merge-engine design, 3d-α).
+                merge::object_merge_pull_unlocked(&store, &skills_dir)?
+            } else {
+                git_backup::pull_unlocked(&skills_dir)?;
+                merge::MergeSummary {
+                    engine: "system".to_string(),
+                    ..Default::default()
+                }
+            };
+            reconcile_skills_index_unlocked(&store)?;
+            store.log_audit(
+                crate::core::audit_log::AuditDraft::new("sync_merge")
+                    .detail(format!(
+                        "engine={} updated={} kept_local={} conflicts={} pending={}",
+                        summary.engine,
+                        summary.updated.len(),
+                        summary.kept_local.len(),
+                        summary.new_conflicts.len(),
+                        summary.pending_total
+                    ))
+                    .ok(),
+            );
+            Ok(summary)
+        })
+        .map_err(AppError::classify_git_error)
+    })
+    .await?
+}
+
+/// Pending "needs attention" conflicts (merge-engine design §4) for the
+/// Backup page. Reads the rebuildable SQLite projection.
+#[tauri::command]
+pub async fn git_backup_pending_conflicts(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<crate::core::skill_store::PendingConflictRow>, AppError> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || store.list_pending_conflicts().map_err(AppError::db))
+        .await?
+}
+
+/// Resolve one pending conflict (§4 解决动作): action is one of
+/// "keep_local" | "use_remote" | "keep_both". Returns the safety snapshot
+/// tag taken before the resolution.
+#[tauri::command]
+pub async fn git_backup_resolve_conflict(
+    store: State<'_, Arc<SkillStore>>,
+    skill_id: String,
+    action: String,
+) -> Result<String, AppError> {
+    let Some(action) = merge::resolve::ResolveAction::parse(&action) else {
+        return Err(AppError::invalid_input("Unknown resolve action"));
+    };
+    let store = store.inner().clone();
+    let skills_dir = central_repo::skills_dir();
+    tokio::task::spawn_blocking(move || {
+        git_backup::with_repo_lock("resolve conflict", || {
+            apply_device_identity(&store, &skills_dir);
+            let safety_tag = merge::resolve::resolve_conflict_unlocked(
+                &store, &skills_dir, &skill_id, action,
+            )?;
+            reconcile_skills_index_unlocked(&store)?;
+            store.log_audit(
+                crate::core::audit_log::AuditDraft::new("resolve_conflict")
+                    .skill(skill_id.clone(), skill_id.clone())
+                    .detail(format!("action={action:?}"))
+                    .ok(),
+            );
+            Ok(safety_tag)
         })
         .map_err(AppError::classify_git_error)
     })

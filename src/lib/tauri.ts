@@ -597,7 +597,47 @@ export const gitBackupCommit = (message: string) =>
 
 export const gitBackupPush = () => invoke<void>("git_backup_push");
 
-export const gitBackupPull = () => invoke<void>("git_backup_pull");
+export interface MergeUpdatedSkill {
+  skill_id: string;
+  path: string;
+  /** Device (commit author) that last touched this skill on the remote. */
+  from_device: string;
+}
+
+/** Outcome of a sync merge (merge-engine design §8). With the default
+ * system engine only `engine` is meaningful. */
+export interface MergeSummary {
+  engine: "object" | "system";
+  up_to_date: boolean;
+  fast_forward: boolean;
+  updated: MergeUpdatedSkill[];
+  kept_local: string[];
+  new_conflicts: string[];
+  pending_total: number;
+  old_client_warning: string | null;
+  legacy_fallback: boolean;
+}
+
+export const gitBackupPull = () => invoke<MergeSummary>("git_backup_pull");
+
+/** One "needs attention" sync conflict (merge-engine design §4). */
+export interface PendingConflict {
+  skill_id: string;
+  theirs_commit: string;
+  theirs_path: string | null;
+  detected_at: number;
+}
+
+export const gitBackupPendingConflicts = () =>
+  invoke<PendingConflict[]>("git_backup_pending_conflicts");
+
+export type ResolveConflictAction = "keep_local" | "use_remote" | "keep_both";
+
+/** Resolve a pending conflict; returns the safety snapshot tag. */
+export const gitBackupResolveConflict = (
+  skillId: string,
+  action: ResolveConflictAction,
+) => invoke<string>("git_backup_resolve_conflict", { skillId, action });
 
 export const gitBackupClone = (url: string) =>
   invoke<void>("git_backup_clone", { url });
