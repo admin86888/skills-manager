@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.2] - 2026-07-03
+
+### Release Overview
+- A data-trust patch for the two top-ranked P0 issues: project workspaces finally honor symlink mode, and a broken central-library config no longer silently presents as an empty library.
+
+### User-facing
+- **Project workspaces now honor symlink mode** — Installing a skill into a project workspace, or updating it from the center, always copied files no matter what the sync-mode setting said; these paths never requested a symlink, which is why the v1.23.1 Windows junction fix never helped and macOS was affected too. They now follow the sync-mode setting exactly like the global workspace, reusing the same platform fallbacks. Updating also refuses to overwrite a project copy that has unsynced local edits, mirroring the global-workspace protection. Note: project symlinks point at this machine's central library and won't travel with the repo — the sync-mode setting description now says so (#225, #202).
+- **A broken central-library config no longer looks like losing every skill** — When `repo-config.json` was unreadable, corrupt, or contained an invalid path, the app silently fell back to the default location and created a fresh empty library there, presenting as "the library was rebuilt, all skills gone" while the data still sat at the configured path. Settings now shows a warning banner explaining the fallback and that the data is still at the previously configured location (#228 follow-up report).
+- **Safer install/update guardrails** — The copy-overlap guard now rejects a source that cannot be resolved (missing or dangling symlink) and mutual source/destination containment before any destructive step runs, hardening local-skill updates against data loss (#199 hardening).
+
+### Developer & Governance
+- Central-repo config loading now distinguishes missing / valid / invalid states; new `get_central_repo_warnings` command feeds the Settings banner.
+- The legacy `.agent-skills` migration ran after directory creation had already made its condition false (dead code since the ordering changed); it now runs first. Also removed a `home_dir().unwrap()` on that path.
+- Global local-skill updates (`update_agent_local_skill_from_center`) follow the sync-mode setting as well.
+- 7 new unit tests: guard edge cases (missing/dangling source, mutual containment), hashing through a symlinked root, and config three-state loading. Root causes and fix plans were adversarially reviewed (codex, read-only sandbox) before implementation.
+
 ## [1.25.1] - 2026-07-03
 
 ### Release Overview
