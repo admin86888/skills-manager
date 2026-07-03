@@ -8,6 +8,7 @@
     "globalWorkspace": "全局工作区",
     "lobsterAgents": "龙虾 Agent",
     "installSkills": "安装 Skills",
+    "backup": "备份",
     "presets": "Preset",
     "newPreset": "新建 Preset",
     "projects": "项目工作区",
@@ -44,8 +45,8 @@
         "description": "关联项目后查看各 Agent 的本地 Skills 目录，对照中央仓库双向导入导出。使用 Preset 标签激活技能组，或点 + 添加 Skills 通过多 Agent 目标选择器从技能库挑选。"
       },
       "backup": {
-        "title": "Git 备份",
-        "description": "在设置页配置远程仓库地址，再到「技能库」执行备份或同步。每次同步生成可恢复的快照标签，适合多机同步和版本管理。"
+        "title": "备份",
+        "description": "在备份页连接仓库、立即备份、恢复快照或断开本机。技能、标签、Preset 及成员关系会备份；密钥和本机专属设置不会备份。"
       },
       "settings": {
         "title": "设置",
@@ -78,6 +79,62 @@
     "scanImport": "扫描本地 Skills 导入",
     "installNew": "安装新 Skills",
     "recentActivity": "近期动态"
+  },
+  "backup": {
+    "title": "备份",
+    "subtitle": "连接一次后，就可以在一个页面完成备份、恢复和断开。",
+    "status": {
+      "loading": "正在检查备份状态",
+      "loadingDesc": "正在读取本地技能库和远端备份状态。",
+      "notConnected": "未连接",
+      "notConnectedDesc": "先保存备份仓库地址，再选择从备份恢复或把本机作为新的备份源。",
+      "needsFix": "备份需要处理",
+      "needsFixDesc": "本机与备份暂时无法安全同步，需要先修复连接状态。",
+      "pending": "有未备份的更改",
+      "pendingDesc": "本地更改：{{local}} · 远端更新：{{remote}}。",
+      "synced": "已备份",
+      "syncedDesc": "最近可见快照：{{when}}。",
+      "noSnapshot": "暂无快照"
+    },
+    "actions": {
+      "backupNow": "立即备份",
+      "backupAgain": "再次备份"
+    },
+    "connection": {
+      "title": "连接",
+      "desc": "当前阶段仍使用高级 Git URL。后续阶段会把 GitHub 登录作为默认连接方式。",
+      "repository": "备份仓库",
+      "branch": "分支",
+      "none": "未连接",
+      "unknown": "未知"
+    },
+    "history": {
+      "title": "备份历史",
+      "empty": "还没有可见快照。执行一次备份后会生成。"
+    },
+    "scope": {
+      "title": "备份范围",
+      "included": {
+        "skills": "技能文件及目录",
+        "metadata": "标签、Preset、Preset 成员关系和每 Agent 的技能开关"
+      },
+      "excluded": {
+        "secrets": "API key、token 和代理凭证",
+        "local": "本机路径、应用设置和本机 Agent 接线"
+      },
+      "sizeHint": "超大的技能目录会拖慢备份。规划中的默认限制是单个技能目录 100 MB，超限技能保留在本机。"
+    },
+    "disconnect": {
+      "title": "断开本机",
+      "desc": "只清除这台机器上的备份连接。本地技能和远端备份数据都会保留。",
+      "confirmTitle": "断开备份？",
+      "confirmMessage": "这会移除本机保存的远端连接。本地技能和远端仓库都会保留。"
+    },
+    "summary": {
+      "title": "技能库概览",
+      "skills": "技能",
+      "snapshots": "快照"
+    }
   },
   "mySkills": {
     "title": "技能库",
@@ -519,7 +576,8 @@
       "applyOn": "开启"
     },
     "gitSyncConfig": "Git 同步配置",
-    "gitSyncConfigDesc": "这里只保存远程仓库地址等偏好；初始化与同步操作请在“技能库”页面执行。",
+    "gitSyncConfigDesc": "备份已移到独立的「备份」页面。这里保留为高级 Git URL 编辑入口。",
+    "openBackupPage": "打开备份页",
     "gitConfigSaved": "Git 同步配置已保存",
     "gitDisconnect": "断开备份",
     "gitDisconnected": "已断开备份，本地技能与远端数据均保留。",
@@ -534,7 +592,7 @@
     "gitSetupCardInitTitle": "把本机作为新的备份源",
     "gitSetupCardInitDesc": "在本地初始化 Git，并将当前 skill 库推送到配置的远程地址。",
     "gitSetupCardInitBadge": "首次：远程仓库为空时",
-    "gitSetupNeedRemote": "请先在「设置 → Git 同步配置」填写远程仓库地址。",
+    "gitSetupNeedRemote": "请先填写备份仓库地址。",
     "gitSetupConfirm": "继续",
     "gitRecoveryTitle": "修复同步配置",
     "gitRecoverySubtitleUnrelated": "本地仓库与远程仓库历史不一致，无法直接同步。请选择一种修复方式。",
@@ -578,7 +636,7 @@
     "gitCommitMessage": "提交信息",
     "gitCommitPlaceholder": "backup: 同步 Skills 库",
     "gitNoRemote": "未配置远程仓库",
-    "gitNeedRemoteSetup": "请先在设置页配置远程仓库地址",
+    "gitNeedRemoteSetup": "请先填写备份仓库地址",
     "gitNeedPullFirst": "远程有更新，请先拉取以避免冲突。",
     "gitPendingSync": "本地变更待同步",
     "gitErrorAuth": "认证失败，请检查 SSH Key 或访问令牌。",

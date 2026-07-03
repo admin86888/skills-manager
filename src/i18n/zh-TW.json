@@ -8,6 +8,7 @@
     "globalWorkspace": "全域工作區",
     "lobsterAgents": "龍蝦 Agent",
     "installSkills": "安裝 Skills",
+    "backup": "備份",
     "presets": "Preset",
     "newPreset": "新增 Preset",
     "projects": "專案工作區",
@@ -44,8 +45,8 @@
         "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用 Preset 標籤啟用技能組，或點 + 新增 Skills 透過多 Agent 目標選擇器從技能庫挑選。"
       },
       "backup": {
-        "title": "Git 備份",
-        "description": "先在設定裡儲存遠端倉庫位址，再去「技能庫」執行備份或同步。每次成功同步都會建立一個可從版本歷史還原的快照標籤，適合多機同步和版本管理。"
+        "title": "備份",
+        "description": "在備份頁連接倉庫、立即備份、還原快照或斷開本機。技能、標籤、Preset 及成員關係會備份；密鑰和本機專屬設定不會備份。"
       },
       "settings": {
         "title": "設定",
@@ -78,6 +79,62 @@
     "scanImport": "掃描本機 Skills 匯入",
     "installNew": "安裝新 Skills",
     "recentActivity": "近期動態"
+  },
+  "backup": {
+    "title": "備份",
+    "subtitle": "連接一次後，就可以在一個頁面完成備份、還原和斷開。",
+    "status": {
+      "loading": "正在檢查備份狀態",
+      "loadingDesc": "正在讀取本機技能庫和遠端備份狀態。",
+      "notConnected": "未連接",
+      "notConnectedDesc": "先儲存備份倉庫位址，再選擇從備份還原或把本機作為新的備份來源。",
+      "needsFix": "備份需要處理",
+      "needsFixDesc": "本機與備份暫時無法安全同步，需要先修復連接狀態。",
+      "pending": "有未備份的變更",
+      "pendingDesc": "本機變更：{{local}} · 遠端更新：{{remote}}。",
+      "synced": "已備份",
+      "syncedDesc": "最近可見快照：{{when}}。",
+      "noSnapshot": "暫無快照"
+    },
+    "actions": {
+      "backupNow": "立即備份",
+      "backupAgain": "再次備份"
+    },
+    "connection": {
+      "title": "連接",
+      "desc": "目前階段仍使用進階 Git URL。後續階段會把 GitHub 登入作為預設連接方式。",
+      "repository": "備份倉庫",
+      "branch": "分支",
+      "none": "未連接",
+      "unknown": "未知"
+    },
+    "history": {
+      "title": "備份歷史",
+      "empty": "還沒有可見快照。執行一次備份後會產生。"
+    },
+    "scope": {
+      "title": "備份範圍",
+      "included": {
+        "skills": "技能檔案及目錄",
+        "metadata": "標籤、Preset、Preset 成員關係和每個 Agent 的技能開關"
+      },
+      "excluded": {
+        "secrets": "API key、token 和代理憑證",
+        "local": "本機路徑、應用設定和本機 Agent 連接"
+      },
+      "sizeHint": "超大的技能目錄會拖慢備份。規劃中的預設限制是單一技能目錄 100 MB，超限技能保留在本機。"
+    },
+    "disconnect": {
+      "title": "斷開本機",
+      "desc": "只清除這台機器上的備份連接。本機技能和遠端備份資料都會保留。",
+      "confirmTitle": "斷開備份？",
+      "confirmMessage": "這會移除本機儲存的遠端連接。本機技能和遠端倉庫都會保留。"
+    },
+    "summary": {
+      "title": "技能庫概覽",
+      "skills": "技能",
+      "snapshots": "快照"
+    }
   },
   "mySkills": {
     "title": "技能庫",
@@ -464,7 +521,8 @@
       "applyOn": "開啟"
     },
     "gitSyncConfig": "Git 同步設定",
-    "gitSyncConfigDesc": "這裡只儲存遠端倉庫位址等偏好；初始化與同步操作請在「技能庫」頁面執行。",
+    "gitSyncConfigDesc": "備份已移到獨立的「備份」頁面。這裡保留為進階 Git URL 編輯入口。",
+    "openBackupPage": "開啟備份頁",
     "gitConfigSaved": "Git 同步設定已儲存",
     "gitDisconnect": "斷開備份",
     "gitDisconnected": "已斷開備份，本機技能與遠端資料均保留。",
@@ -479,7 +537,7 @@
     "gitSetupCardInitTitle": "把本機作為新的備份來源",
     "gitSetupCardInitDesc": "在本機初始化 Git，並將目前 skill 庫推送到設定的遠端位址。",
     "gitSetupCardInitBadge": "首次：遠端倉庫為空時",
-    "gitSetupNeedRemote": "請先在「設定 → Git 同步設定」填寫遠端倉庫位址。",
+    "gitSetupNeedRemote": "請先填寫備份倉庫位址。",
     "gitSetupConfirm": "繼續",
     "gitRecoveryTitle": "修復同步設定",
     "gitRecoverySubtitleUnrelated": "本機倉庫與遠端倉庫歷史不一致，無法直接同步。請選擇修復方式。",
@@ -523,7 +581,7 @@
     "gitCommitMessage": "提交訊息",
     "gitCommitPlaceholder": "backup: 同步 Skills 庫",
     "gitNoRemote": "未設定遠端倉庫",
-    "gitNeedRemoteSetup": "請先在設定頁設定遠端倉庫位址",
+    "gitNeedRemoteSetup": "請先填寫備份倉庫位址",
     "gitNeedPullFirst": "遠端有更新，請先拉取以避免衝突。",
     "gitPendingSync": "本機變更待同步",
     "gitErrorAuth": "驗證失敗，請檢查 SSH Key 或存取權杖。",

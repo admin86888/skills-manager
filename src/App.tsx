@@ -12,6 +12,7 @@ import { CODING_WORKSPACE_CONFIG, LOBSTER_WORKSPACE_CONFIG } from "./views/works
 import { InstallSkills } from "./views/InstallSkills";
 import { Settings } from "./views/Settings";
 import { ProjectDetail } from "./views/ProjectDetail";
+import { Backup } from "./views/Backup";
 
 function ThemedToaster() {
   const { resolvedTheme } = useThemeContext();
@@ -44,6 +45,7 @@ function App() {
               <Route path="/lobster-workspace" element={<WorkspaceView config={LOBSTER_WORKSPACE_CONFIG} />} />
               <Route path="/lobster-workspace/:agentKey" element={<WorkspaceView config={LOBSTER_WORKSPACE_CONFIG} />} />
               <Route path="/install" element={<InstallSkills />} />
+              <Route path="/backup" element={<Backup />} />
               <Route path="/project/:id" element={<ProjectDetail />} />
               <Route path="/settings" element={<Settings />} />
             </Route>

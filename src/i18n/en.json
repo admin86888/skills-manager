@@ -8,6 +8,7 @@
     "globalWorkspace": "Global Workspace",
     "lobsterAgents": "Lobster Agents",
     "installSkills": "Install Skills",
+    "backup": "Backup",
     "presets": "Presets",
     "newPreset": "New Preset",
     "projects": "Project Workspaces",
@@ -44,8 +45,8 @@
         "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or open + Add Skills to pick from your library with a multi-agent target picker."
       },
       "backup": {
-        "title": "Git Backup",
-        "description": "Configure a remote repository in Settings, then back up or sync from the Library page. Each sync creates a restorable snapshot tag — ideal for multi-machine sync and version tracking."
+        "title": "Backup",
+        "description": "Use the Backup page to connect a repository, run a backup, restore a snapshot, and disconnect this machine. Skills, tags, presets, and preset membership are backed up; secrets and machine-specific settings are not."
       },
       "settings": {
         "title": "Settings",
@@ -78,6 +79,62 @@
     "scanImport": "Scan & Import Local Skills",
     "installNew": "Install New Skills",
     "recentActivity": "Recent Activity"
+  },
+  "backup": {
+    "title": "Backup",
+    "subtitle": "Connect once, then back up or restore your skill library from one place.",
+    "status": {
+      "loading": "Checking backup status",
+      "loadingDesc": "Reading the local library and remote backup state.",
+      "notConnected": "Not connected",
+      "notConnectedDesc": "Save a backup repository URL, then choose whether to restore from it or back up this machine as new.",
+      "needsFix": "Backup needs attention",
+      "needsFixDesc": "This machine and the backup cannot sync safely until the connection is repaired.",
+      "pending": "Unbacked changes",
+      "pendingDesc": "Local changes: {{local}} · remote updates: {{remote}}.",
+      "synced": "Backed up",
+      "syncedDesc": "Latest visible snapshot: {{when}}.",
+      "noSnapshot": "no snapshot yet"
+    },
+    "actions": {
+      "backupNow": "Back Up Now",
+      "backupAgain": "Back Up Again"
+    },
+    "connection": {
+      "title": "Connection",
+      "desc": "Advanced Git URL for the current implementation. GitHub sign-in will replace this as the default flow in a later phase.",
+      "repository": "Backup repository",
+      "branch": "Branch",
+      "none": "Not connected",
+      "unknown": "Unknown"
+    },
+    "history": {
+      "title": "Backup History",
+      "empty": "No visible snapshots yet. Run a backup to create one."
+    },
+    "scope": {
+      "title": "Backup Scope",
+      "included": {
+        "skills": "Skills and their files",
+        "metadata": "Tags, presets, preset membership, and per-agent skill toggles"
+      },
+      "excluded": {
+        "secrets": "API keys, tokens, and proxy credentials",
+        "local": "Machine-specific paths, app settings, and local agent setup"
+      },
+      "sizeHint": "Very large skill folders may make backups slow. The planned default limit is 100 MB per skill folder, with oversized skills kept local."
+    },
+    "disconnect": {
+      "title": "Disconnect This Machine",
+      "desc": "Removes the backup connection from this machine only. Local skills and remote backup data are kept.",
+      "confirmTitle": "Disconnect backup?",
+      "confirmMessage": "This removes the saved remote connection from this machine. Your local skills and remote repository will remain."
+    },
+    "summary": {
+      "title": "Library Summary",
+      "skills": "Skills",
+      "snapshots": "Snapshots"
+    }
   },
   "mySkills": {
     "title": "Library",
@@ -519,7 +576,8 @@
       "applyOn": "On"
     },
     "gitSyncConfig": "Git Sync Configuration",
-    "gitSyncConfigDesc": "This page stores remote repository preferences only. Initialize and run sync from the Library page.",
+    "gitSyncConfigDesc": "Backup has moved to the dedicated Backup page. This legacy field is kept here for advanced Git URL edits.",
+    "openBackupPage": "Open Backup",
     "gitConfigSaved": "Git sync configuration saved",
     "gitDisconnect": "Disconnect",
     "gitDisconnected": "Backup disconnected. Local skills and remote data are kept.",
@@ -534,7 +592,7 @@
     "gitSetupCardInitTitle": "Back up this machine as new",
     "gitSetupCardInitDesc": "Initialize Git locally and push the current skill library to the configured remote.",
     "gitSetupCardInitBadge": "First time: when remote is empty",
-    "gitSetupNeedRemote": "Set a remote URL in Settings → Git Sync first.",
+    "gitSetupNeedRemote": "Set a backup repository URL first.",
     "gitSetupConfirm": "Continue",
     "gitRecoveryTitle": "Fix Sync Setup",
     "gitRecoverySubtitleUnrelated": "Local repository and remote do not share history; sync cannot proceed. Pick how to fix it.",
@@ -578,7 +636,7 @@
     "gitCommitMessage": "Commit message",
     "gitCommitPlaceholder": "backup: sync skills library",
     "gitNoRemote": "No remote configured",
-    "gitNeedRemoteSetup": "Set a remote repository URL in Settings first",
+    "gitNeedRemoteSetup": "Set a backup repository URL first",
     "gitNeedPullFirst": "Remote has newer changes. Pull first to avoid conflicts.",
     "gitPendingSync": "Local changes are ready to sync",
     "gitErrorAuth": "Authentication failed. Check SSH key or access token.",
