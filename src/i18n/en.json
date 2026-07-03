@@ -111,6 +111,20 @@
       "none": "Not connected",
       "unknown": "Unknown"
     },
+    "github": {
+      "title": "Connect with GitHub",
+      "desc": "Paste a GitHub personal access token — the private backup repository is created for you, and the token is stored in the system keychain, never in files.",
+      "tokenPlaceholder": "GitHub personal access token (ghp_… / github_pat_…)",
+      "repoLabel": "Repository name",
+      "connect": "Connect",
+      "connecting": "Connecting…",
+      "connectedRestored": "Connected — existing backup restored.",
+      "repoCreated": "Created private repository {{repo}}.",
+      "tokenHint": "Create a token on GitHub (repo scope, pre-filled)",
+      "errorToken": "GitHub rejected the token. Check that it hasn't expired and was copied completely.",
+      "errorScope": "The token can't create or access the repository. Use a classic token with the \"repo\" scope, or grant a fine-grained token Administration (write) permission.",
+      "errorKeychain": "Couldn't store the token in the system keychain. Guided GitHub setup requires the keychain; you can still use the advanced Git URL below."
+    },
     "history": {
       "title": "Backup History",
       "empty": "No visible snapshots yet. Run a backup to create one."

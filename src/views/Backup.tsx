@@ -3,6 +3,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Cloud,
+  ExternalLink,
+  Github,
   History,
   Loader2,
   RefreshCw,
@@ -13,6 +15,7 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -20,7 +23,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { GitRecoveryDialog } from "../components/GitRecoveryDialog";
 import { GitSetupDialog } from "../components/GitSetupDialog";
 import { useApp } from "../context/AppContext";
-import { getErrorMessage } from "../lib/error";
+import { getErrorKind, getErrorMessage } from "../lib/error";
 import { mapGitErrorMessage } from "../lib/gitErrors";
 import * as api from "../lib/tauri";
 import type {
@@ -38,7 +41,11 @@ type BackupMode =
   | "up_to_date"
   | "pending_changes";
 
-type LoadingAction = "start" | "sync" | "recovery" | "save" | "disconnect" | null;
+type LoadingAction = "start" | "sync" | "recovery" | "save" | "disconnect" | "github" | null;
+
+const DEFAULT_GITHUB_REPO = "skills-manager-backup";
+const GITHUB_TOKEN_URL =
+  "https://github.com/settings/tokens/new?scopes=repo&description=Skills%20Manager%20Backup";
 type RecoveryReason = GitUpstreamHealth | "conflict";
 
 function displaySnapshotLabel(tag: string) {
@@ -87,6 +94,9 @@ export function Backup() {
   const [disconnectConfirmOpen, setDisconnectConfirmOpen] = useState(false);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [sizeReport, setSizeReport] = useState<GitBackupSizeReport | null>(null);
+  const [githubToken, setGithubToken] = useState("");
+  const [githubRepoName, setGithubRepoName] = useState(DEFAULT_GITHUB_REPO);
+  const [githubError, setGithubError] = useState<string | null>(null);
 
   const mapGitError = useCallback(
     (error: unknown) => mapGitErrorMessage(error, t),
@@ -376,6 +386,61 @@ export function Backup() {
     }
   };
 
+  const mapGithubError = (error: unknown) => {
+    const message = getErrorMessage(error, "");
+    if (message.includes("GITHUB_TOKEN_INVALID")) return t("backup.github.errorToken");
+    if (message.includes("GITHUB_SCOPE")) return t("backup.github.errorScope");
+    if (message.includes("KEYCHAIN_UNAVAILABLE")) return t("backup.github.errorKeychain");
+    if (message.includes("GITHUB_NETWORK") || getErrorKind(error) === "network") {
+      return t("settings.gitErrorNetwork");
+    }
+    return mapGitError(error);
+  };
+
+  const handleGithubConnect = async () => {
+    const token = githubToken.trim();
+    if (!token) return;
+    setLoading("github");
+    setGithubError(null);
+    try {
+      const res = await api.githubBackupConnect(
+        token,
+        githubRepoName.trim() || DEFAULT_GITHUB_REPO,
+      );
+      // Token is in the OS keychain now; drop it from component state.
+      setGithubToken("");
+      setRemoteInput(res.url);
+      setRemoteConfig(res.url);
+      if (res.repo_created) {
+        const repo = res.url.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+        toast.success(t("backup.github.repoCreated", { repo }));
+      }
+      const status = await api.gitBackupStatus();
+      if (res.remote_has_content) {
+        // Existing backup: restore it (or just rewire when a repo already exists).
+        if (!status.is_repo) {
+          await api.gitBackupClone(res.url);
+        } else {
+          await api.gitBackupSetRemote(res.url);
+        }
+        toast.success(t("backup.github.connectedRestored"));
+        await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshVersions()]);
+      } else {
+        // Fresh backup: initialize if needed, wire the remote, run the first backup.
+        if (!status.is_repo) {
+          await api.gitBackupInit();
+        }
+        await api.gitBackupSetRemote(res.url);
+        await refreshGitStatus();
+        await handleBackupNow();
+      }
+    } catch (error) {
+      setGithubError(mapGithubError(error));
+    } finally {
+      setLoading(null);
+    }
+  };
+
   const handleRestoreVersion = async () => {
     if (!restoreVersionTag) return;
     setRestoringVersionTag(restoreVersionTag);
@@ -497,6 +562,67 @@ export function Backup() {
               </div>
             </div>
           </section>
+
+          {!gitStatus?.remote_url && !remoteConfig && (
+            <section className="app-panel p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <Github className="h-4 w-4 text-muted" />
+                <h2 className="text-[14px] font-semibold text-secondary">{t("backup.github.title")}</h2>
+              </div>
+              <p className="mb-3 text-[13px] leading-5 text-muted">{t("backup.github.desc")}</p>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(event) => {
+                      setGithubToken(event.target.value);
+                      setGithubError(null);
+                    }}
+                    placeholder={t("backup.github.tokenPlaceholder")}
+                    disabled={loading === "github"}
+                    className="h-8 min-w-0 flex-1 rounded-[4px] border border-border-subtle bg-background px-2.5 font-mono text-[13px] text-secondary outline-none transition-colors focus:border-border disabled:opacity-50"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <input
+                    type="text"
+                    value={githubRepoName}
+                    onChange={(event) => setGithubRepoName(event.target.value)}
+                    disabled={loading === "github"}
+                    title={t("backup.github.repoLabel")}
+                    className="h-8 w-52 rounded-[4px] border border-border-subtle bg-background px-2.5 font-mono text-[13px] text-secondary outline-none transition-colors focus:border-border disabled:opacity-50"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGithubConnect}
+                    disabled={!!loading || !githubToken.trim()}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-accent-border bg-accent-dark px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading === "github" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Github className="h-3.5 w-3.5" />}
+                    {loading === "github" ? t("backup.github.connecting") : t("backup.github.connect")}
+                  </button>
+                </div>
+                {githubError && (
+                  <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] leading-5 text-red-600 dark:text-red-300">
+                    {githubError}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void openUrl(GITHUB_TOKEN_URL)}
+                  className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-secondary"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {t("backup.github.tokenHint")}
+                </button>
+              </div>
+            </section>
+          )}
 
           <section className="app-panel p-4">
             <div className="mb-3 flex items-center gap-2">

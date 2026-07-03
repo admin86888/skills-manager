@@ -277,6 +277,27 @@ pub(crate) fn verify_remote_auth(skills_dir: &Path) -> Result<()> {
     run_git_env(skills_dir, &["ls-remote", "--heads", "origin"], &env).map(|_| ())
 }
 
+/// Whether a remote (addressed by URL, no local repo needed) has any branch.
+/// Uses stored keychain credentials via askpass when available. Distinguishes
+/// "freshly created empty repository" from "existing backup to restore".
+pub fn remote_has_heads(url: &str) -> Result<bool> {
+    let env = git_credentials::credential_env_for_url(url);
+    let output = git_command()
+        .args(["ls-remote", "--heads"])
+        .arg(url)
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .output()
+        .context("Failed to run git command")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git ls-remote failed: {}",
+            redact_urls_in_text(stderr.trim())
+        );
+    }
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
 /// Remove the remote origin. Idempotent: succeeds when the repo or the
 /// remote does not exist, so a retry after a partial disconnect converges.
 /// Local repository and remote data are untouched.

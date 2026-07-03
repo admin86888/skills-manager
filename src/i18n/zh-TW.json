@@ -111,6 +111,20 @@
       "none": "未連接",
       "unknown": "未知"
     },
+    "github": {
+      "title": "使用 GitHub 連線",
+      "desc": "貼上一個 GitHub 個人存取權杖——私有備份儲存庫會自動建立，權杖儲存在系統鑰匙圈中，不會寫進任何檔案。",
+      "tokenPlaceholder": "GitHub 個人存取權杖（ghp_… / github_pat_…）",
+      "repoLabel": "儲存庫名稱",
+      "connect": "連線",
+      "connecting": "正在連線…",
+      "connectedRestored": "已連線——現有備份已還原。",
+      "repoCreated": "已建立私有儲存庫 {{repo}}。",
+      "tokenHint": "到 GitHub 建立權杖（repo 權限，已預填）",
+      "errorToken": "GitHub 拒絕了該權杖。請檢查它是否過期、是否複製完整。",
+      "errorScope": "該權杖無法建立或存取儲存庫。請使用帶「repo」權限的 classic 權杖，或給 fine-grained 權杖授予 Administration（寫入）權限。",
+      "errorKeychain": "無法將權杖存入系統鑰匙圈。GitHub 引導連線依賴鑰匙圈；你仍可使用下方的進階 Git 位址方式。"
+    },
     "history": {
       "title": "備份歷史",
       "empty": "還沒有可見快照。執行一次備份後會產生。"

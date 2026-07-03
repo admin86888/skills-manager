@@ -1,6 +1,6 @@
 use crate::core::{
-    central_repo, error::AppError, git_backup, git_credentials, git_fetcher, skill_metadata,
-    sync_metadata,
+    central_repo, error::AppError, git_backup, git_credentials, git_fetcher, github_api,
+    skill_metadata, sync_metadata,
 };
 use anyhow::Context;
 use std::path::Path;
@@ -93,6 +93,68 @@ fn sanitize_url_to_keychain(url: &str) -> String {
             url.to_string()
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GithubBackupConnectResult {
+    /// Credential-free HTTPS URL of the backup repository.
+    pub url: String,
+    pub login: String,
+    pub repo_created: bool,
+    /// True when the remote already has commits — the frontend restores
+    /// (clones) instead of initializing a fresh backup.
+    pub remote_has_content: bool,
+}
+
+/// GitHub guided connect (backup redesign Phase 2, PAT mode): validate the
+/// token, find or create the private backup repository, store the token in
+/// the OS keychain, and save the credential-free URL. The keychain is
+/// mandatory here — guided mode never falls back to token-in-URL.
+#[tauri::command]
+pub async fn github_backup_connect(
+    store: State<'_, Arc<SkillStore>>,
+    token: String,
+    repo_name: String,
+) -> Result<GithubBackupConnectResult, AppError> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(AppError::invalid_input("Token is empty"));
+        }
+        let repo_name = repo_name.trim();
+        if !github_api::is_valid_repo_name(repo_name) {
+            return Err(AppError::invalid_input("Invalid repository name"));
+        }
+
+        let proxy_url = store.proxy_url();
+        let info = github_api::connect_backup_repo(token, repo_name, proxy_url.as_deref())
+            .map_err(AppError::network)?;
+
+        git_credentials::store_credential(
+            "github.com",
+            &git_credentials::RemoteCredential {
+                username: info.login.clone(),
+                password: token.to_string(),
+            },
+        )
+        .map_err(|e| AppError::internal(format!("KEYCHAIN_UNAVAILABLE: {e:#}")))?;
+
+        store
+            .set_setting("git_backup_remote_url", &info.url)
+            .map_err(AppError::db)?;
+
+        let remote_has_content =
+            git_backup::remote_has_heads(&info.url).map_err(AppError::classify_git_error)?;
+
+        Ok(GithubBackupConnectResult {
+            url: info.url,
+            login: info.login,
+            repo_created: info.repo_created,
+            remote_has_content,
+        })
+    })
+    .await?
 }
 
 /// Sanitize a remote URL before it is persisted anywhere: embedded

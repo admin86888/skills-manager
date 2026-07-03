@@ -982,6 +982,7 @@ pub fn run() {
             commands::git_backup::git_backup_status,
             commands::git_backup::git_backup_init,
             commands::git_backup::git_backup_set_remote,
+            commands::git_backup::github_backup_connect,
             commands::git_backup::git_backup_sanitize_remote_url,
             commands::git_backup::git_backup_migrate_credentials,
             commands::git_backup::git_backup_size_report,

@@ -538,6 +538,18 @@ export const gitBackupSetRemote = (url: string) =>
 export const gitBackupSanitizeRemoteUrl = (url: string) =>
   invoke<string>("git_backup_sanitize_remote_url", { url });
 
+export interface GithubBackupConnectResult {
+  url: string;
+  login: string;
+  repo_created: boolean;
+  remote_has_content: boolean;
+}
+
+/** GitHub guided connect (PAT): validates the token, finds or creates the
+ * private backup repo, stores the token in the OS keychain, saves the URL. */
+export const githubBackupConnect = (token: string, repoName: string) =>
+  invoke<GithubBackupConnectResult>("github_backup_connect", { token, repoName });
+
 /** Migrate token-in-URL remotes to the OS keychain. Returns the sanitized URL if migrated. */
 export const gitBackupMigrateCredentials = () =>
   invoke<string | null>("git_backup_migrate_credentials");
