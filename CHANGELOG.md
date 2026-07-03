@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-07-03
+
+### Release Overview
+- First installment of the backup redesign (cluster #24 / #264): a dedicated Backup page, restores that are always undoable, and access tokens moved out of files into the OS keychain.
+
+### User-facing
+- **New "Backup" page** — A sidebar entry that gathers everything backup-related in one place: connection status, Back Up Now, snapshot history with one-click restore, a clear list of what is and isn't backed up, and Disconnect. The Library toolbar's backup controls collapse into a single status dot that links here; the Git URL field in Settings remains as an advanced entry.
+- **Restore is always undoable** — Before restoring any snapshot, the current state (including unsaved edits) is first saved as a visible snapshot of its own and shown in the history; a failed restore rolls back to it automatically. The old "commit or sync before restoring" blocker is gone.
+- **Access tokens leave your files** — Tokens embedded in backup URLs (`https://user:token@host/...`) are automatically migrated into the OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service): `.git/config` and the app database are rewritten to the credential-free URL and the connection is re-verified, with a full rollback if any step fails. Newly saved or cloned URLs are sanitized the same way. Git receives credentials in memory only — tokens no longer appear in any file or log.
+- **Disconnect also removes this machine's credential** — Disconnecting deletes the stored keychain credential along with the remote configuration. Remote data and other devices are unaffected.
+- **Clearer status language** — The pending state now says how many skills have unbacked changes, and a failed backup stays visible as a red status card with a plain-language reason and a Retry button instead of a vanishing toast.
+- **First-launch restore** — On a fresh install with an empty library, the app asks up front: start fresh, or restore from a backup? Pasting the backup repository URL brings everything over (#193/#140 lesson: the restore entry must not be buried in a toolbar).
+- **Size warnings** — The Backup page warns when a single skill folder exceeds 100 MB or the whole backup exceeds 1 GB (warn-only for now; oversized skills are still included).
+
+### Developer & Governance
+- New `git_credentials` core module: keyring v3 (`apple-native` / `windows-native` / `sync-secret-service` with vendored libdbus), URL userinfo parsing, and a static askpass script that only echoes environment variables — no secrets on disk.
+- New commands `git_backup_sanitize_remote_url`, `git_backup_migrate_credentials`, `git_backup_size_report`; `git_backup_set_remote` returns the sanitized URL and `git_backup_restore_version` returns the safety-point tag. App startup runs the credential migration idempotently in the background.
+- Backup-redesign Phase 1 acceptance is now automated: #244 (status stays in-sync across a simulated restart), #260 (disconnect clears origin and setting, idempotent), migration rollback leaves no half-migrated state, restore safety point captures dirty edits, and URL credential parsing — 304 tests total.
+- `test.yml` gains a Linux cargo-check job so Linux-only compile breaks (e.g. keyring's vendored libdbus) surface on push instead of at release time; previously Linux was only compiled by the release workflow.
+- Git error mapping extracted from the Backup page into `lib/gitErrors.ts`, shared with the first-run dialog; backup proposal Phase 1 status updated in `docs/backup-redesign-proposal.md` §7.
+
 ## [1.25.2] - 2026-07-03
 
 ### Release Overview
