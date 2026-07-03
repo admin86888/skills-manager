@@ -13,6 +13,11 @@ use super::skillssh_api::build_http_client;
 
 const API_BASE: &str = "https://api.github.com";
 
+/// Public OAuth App client id for the GitHub Device Flow (backup redesign
+/// §3.2). Client ids are not secrets — shipping one in an open-source app is
+/// the standard device-flow setup; there is deliberately no client secret.
+pub const OAUTH_CLIENT_ID: &str = "Ov23li4a3SMdhIiKo7IE";
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GithubConnectInfo {
     pub login: String,
@@ -132,6 +137,89 @@ pub fn connect_backup_repo(
         url: format!("https://github.com/{full_name}.git"),
         repo_full_name: full_name,
         repo_created,
+    })
+}
+
+// ── Device Flow (§3.2) ──
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceFlowStart {
+    pub device_code: String,
+    /// The 8-character code the user types at `verification_uri`.
+    pub user_code: String,
+    pub verification_uri: String,
+    /// Seconds until the codes expire (GitHub: 900).
+    pub expires_in: u64,
+    /// Minimum seconds between polls (GitHub: 5).
+    pub interval: u64,
+}
+
+pub enum DevicePollOutcome {
+    Pending,
+    /// Polled too fast — caller must add 5 seconds to its interval.
+    SlowDown,
+    Authorized { token: String },
+}
+
+/// Request a device + user code pair to start the flow.
+pub fn device_flow_start(proxy_url: Option<&str>) -> Result<DeviceFlowStart> {
+    let client = build_http_client(proxy_url, 20);
+    let resp = client
+        .post("https://github.com/login/device/code")
+        .header("Accept", "application/json")
+        .form(&[("client_id", OAUTH_CLIENT_ID), ("scope", "repo")])
+        .send()
+        .context("GITHUB_NETWORK: could not reach github.com")?;
+    if !resp.status().is_success() {
+        bail!("GitHub device-code endpoint returned HTTP {}", resp.status());
+    }
+    let v: serde_json::Value = resp.json().context("Unexpected device-code response")?;
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .with_context(|| format!("device-code response missing {k}"))
+    };
+    Ok(DeviceFlowStart {
+        device_code: field("device_code")?,
+        user_code: field("user_code")?,
+        verification_uri: field("verification_uri")?,
+        expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(900),
+        interval: v.get("interval").and_then(|x| x.as_u64()).unwrap_or(5),
+    })
+}
+
+/// One poll of the token endpoint. The caller owns the pacing loop
+/// (`interval` seconds between calls, +5s on `SlowDown`, stop at expiry).
+pub fn device_flow_poll(device_code: &str, proxy_url: Option<&str>) -> Result<DevicePollOutcome> {
+    let client = build_http_client(proxy_url, 20);
+    let resp = client
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", OAUTH_CLIENT_ID),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .context("GITHUB_NETWORK: could not reach github.com")?;
+    let v: serde_json::Value = resp.json().context("Unexpected token response")?;
+
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        return match err {
+            "authorization_pending" => Ok(DevicePollOutcome::Pending),
+            "slow_down" => Ok(DevicePollOutcome::SlowDown),
+            "expired_token" => bail!("GITHUB_DEVICE_EXPIRED: the verification code expired"),
+            "access_denied" => bail!("GITHUB_DEVICE_DENIED: authorization was declined on GitHub"),
+            other => bail!("GitHub device flow failed: {other}"),
+        };
+    }
+    let token = v
+        .get("access_token")
+        .and_then(|x| x.as_str())
+        .context("token response missing access_token")?;
+    Ok(DevicePollOutcome::Authorized {
+        token: token.to_string(),
     })
 }
 

@@ -550,6 +550,27 @@ export interface GithubBackupConnectResult {
 export const githubBackupConnect = (token: string, repoName: string) =>
   invoke<GithubBackupConnectResult>("github_backup_connect", { token, repoName });
 
+export interface GithubDeviceFlowStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface GithubDevicePollResult {
+  status: "pending" | "slow_down" | "connected";
+  result: GithubBackupConnectResult | null;
+}
+
+export const githubDeviceFlowStart = () =>
+  invoke<GithubDeviceFlowStart>("github_device_flow_start");
+
+/** One poll; on authorization the backend completes the whole connect and the
+ * OAuth token never reaches the webview. */
+export const githubDeviceFlowPoll = (deviceCode: string, repoName: string) =>
+  invoke<GithubDevicePollResult>("github_device_flow_poll", { deviceCode, repoName });
+
 /** Migrate token-in-URL remotes to the OS keychain. Returns the sanitized URL if migrated. */
 export const gitBackupMigrateCredentials = () =>
   invoke<string | null>("git_backup_migrate_credentials");

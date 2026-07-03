@@ -113,7 +113,7 @@
     },
     "github": {
       "title": "使用 GitHub 连接",
-      "desc": "粘贴一个 GitHub 个人访问令牌——私有备份仓库会自动创建，令牌保存在系统钥匙串中，不会写进任何文件。",
+      "desc": "使用 GitHub 登录，私有备份仓库会自动创建。凭证保存在系统钥匙串中，不会写进任何文件。",
       "tokenPlaceholder": "GitHub 个人访问令牌（ghp_… / github_pat_…）",
       "repoLabel": "仓库名",
       "connect": "连接",
@@ -123,7 +123,16 @@
       "tokenHint": "去 GitHub 创建令牌（repo 权限，已预填）",
       "errorToken": "GitHub 拒绝了该令牌。请检查它是否过期、是否复制完整。",
       "errorScope": "该令牌无法创建或访问仓库。请使用带「repo」权限的 classic 令牌，或给 fine-grained 令牌授予 Administration（写）权限。",
-      "errorKeychain": "无法将令牌存入系统钥匙串。GitHub 引导连接依赖钥匙串；你仍可使用下方的高级 Git 地址方式。"
+      "errorKeychain": "无法将令牌存入系统钥匙串。GitHub 引导连接依赖钥匙串；你仍可使用下方的高级 Git 地址方式。",
+      "deviceSignIn": "使用 GitHub 登录",
+      "deviceWaitDesc": "浏览器已打开 {{uri}}。在该页面输入上方代码完成授权——本页会自动继续。",
+      "deviceWaiting": "等待在 GitHub 上完成授权…",
+      "deviceCopyCode": "复制代码",
+      "deviceCodeCopied": "代码已复制。",
+      "deviceExpired": "验证码已过期。点击「使用 GitHub 登录」重新获取。",
+      "deviceDenied": "授权在 GitHub 上被拒绝，未做任何更改。",
+      "deviceFallbackPat": "如果你的网络访问 github.com 不稳定，可改用下方的个人访问令牌方式。",
+      "patToggle": "改用个人访问令牌（高级）"
     },
     "history": {
       "title": "备份历史",

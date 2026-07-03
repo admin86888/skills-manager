@@ -113,7 +113,7 @@
     },
     "github": {
       "title": "使用 GitHub 連線",
-      "desc": "貼上一個 GitHub 個人存取權杖——私有備份儲存庫會自動建立，權杖儲存在系統鑰匙圈中，不會寫進任何檔案。",
+      "desc": "使用 GitHub 登入，私有備份儲存庫會自動建立。憑證儲存在系統鑰匙圈中，不會寫進任何檔案。",
       "tokenPlaceholder": "GitHub 個人存取權杖（ghp_… / github_pat_…）",
       "repoLabel": "儲存庫名稱",
       "connect": "連線",
@@ -123,7 +123,16 @@
       "tokenHint": "到 GitHub 建立權杖（repo 權限，已預填）",
       "errorToken": "GitHub 拒絕了該權杖。請檢查它是否過期、是否複製完整。",
       "errorScope": "該權杖無法建立或存取儲存庫。請使用帶「repo」權限的 classic 權杖，或給 fine-grained 權杖授予 Administration（寫入）權限。",
-      "errorKeychain": "無法將權杖存入系統鑰匙圈。GitHub 引導連線依賴鑰匙圈；你仍可使用下方的進階 Git 位址方式。"
+      "errorKeychain": "無法將權杖存入系統鑰匙圈。GitHub 引導連線依賴鑰匙圈；你仍可使用下方的進階 Git 位址方式。",
+      "deviceSignIn": "使用 GitHub 登入",
+      "deviceWaitDesc": "瀏覽器已開啟 {{uri}}。在該頁面輸入上方代碼完成授權——本頁會自動繼續。",
+      "deviceWaiting": "等待在 GitHub 上完成授權…",
+      "deviceCopyCode": "複製代碼",
+      "deviceCodeCopied": "代碼已複製。",
+      "deviceExpired": "驗證碼已過期。點擊「使用 GitHub 登入」重新取得。",
+      "deviceDenied": "授權在 GitHub 上被拒絕，未做任何變更。",
+      "deviceFallbackPat": "如果你的網路存取 github.com 不穩定，可改用下方的個人存取權杖方式。",
+      "patToggle": "改用個人存取權杖（進階）"
     },
     "history": {
       "title": "備份歷史",

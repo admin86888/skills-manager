@@ -113,7 +113,7 @@
     },
     "github": {
       "title": "Connect with GitHub",
-      "desc": "Paste a GitHub personal access token — the private backup repository is created for you, and the token is stored in the system keychain, never in files.",
+      "desc": "Sign in with GitHub and the private backup repository is set up for you. Your credentials are stored in the system keychain, never in files.",
       "tokenPlaceholder": "GitHub personal access token (ghp_… / github_pat_…)",
       "repoLabel": "Repository name",
       "connect": "Connect",
@@ -123,7 +123,16 @@
       "tokenHint": "Create a token on GitHub (repo scope, pre-filled)",
       "errorToken": "GitHub rejected the token. Check that it hasn't expired and was copied completely.",
       "errorScope": "The token can't create or access the repository. Use a classic token with the \"repo\" scope, or grant a fine-grained token Administration (write) permission.",
-      "errorKeychain": "Couldn't store the token in the system keychain. Guided GitHub setup requires the keychain; you can still use the advanced Git URL below."
+      "errorKeychain": "Couldn't store the token in the system keychain. Guided GitHub setup requires the keychain; you can still use the advanced Git URL below.",
+      "deviceSignIn": "Sign in with GitHub",
+      "deviceWaitDesc": "A browser window opened at {{uri}}. Enter the code above there to authorize — this page will continue automatically.",
+      "deviceWaiting": "Waiting for authorization on GitHub…",
+      "deviceCopyCode": "Copy code",
+      "deviceCodeCopied": "Code copied.",
+      "deviceExpired": "The verification code expired. Click \"Sign in with GitHub\" to get a new one.",
+      "deviceDenied": "Authorization was declined on GitHub. Nothing was changed.",
+      "deviceFallbackPat": "If github.com is hard to reach from your network, use a personal access token below instead.",
+      "patToggle": "Use a personal access token instead (advanced)"
     },
     "history": {
       "title": "Backup History",
