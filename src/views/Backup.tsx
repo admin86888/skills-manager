@@ -725,10 +725,10 @@ export function Backup() {
   // §3.1 row 3: repo deletion needs the `delete_repo` scope our tokens
   // deliberately don't have — GitHub's own settings page (with its type-the-
   // repo-name confirmation) is the safe double-confirm path.
-  const handleOpenDeleteRemote = () => {
+  const handleOpenDeleteRemote = async () => {
     setDeleteRemoteConfirmOpen(false);
     if (githubRepoWebUrl) {
-      openUrl(`${githubRepoWebUrl}/settings#danger-zone`).catch(() => {});
+      await openUrl(`${githubRepoWebUrl}/settings#danger-zone`).catch(() => {});
       toast.info(t("backup.disconnect.deleteRemoteOpened"), { duration: 12000 });
     }
   };
