@@ -164,17 +164,22 @@ pub async fn github_backup_connect(
 ) -> Result<GithubBackupConnectResult, AppError> {
     let store = store.inner().clone();
     sync_engine_pref(&store);
-    tokio::task::spawn_blocking(move || connect_with_token(&store, token.trim(), repo_name.trim()))
-        .await?
+    tokio::task::spawn_blocking(move || {
+        connect_with_token(&store, token.trim(), repo_name.trim(), "pat")
+    })
+    .await?
 }
 
 /// Shared tail of both connect paths (PAT and Device Flow): validate the
 /// token, find/create the repo, keychain the token, save the URL, and probe
-/// whether the remote already has content.
+/// whether the remote already has content. `method` ("oauth" | "pat") is
+/// persisted so the disconnect matrix (§3.1) can point revocation at the
+/// right GitHub page.
 fn connect_with_token(
     store: &SkillStore,
     token: &str,
     repo_name: &str,
+    method: &str,
 ) -> Result<GithubBackupConnectResult, AppError> {
     if token.is_empty() {
         return Err(AppError::invalid_input("Token is empty"));
@@ -198,6 +203,9 @@ fn connect_with_token(
 
     store
         .set_setting("git_backup_remote_url", &info.url)
+        .map_err(AppError::db)?;
+    store
+        .set_setting("github_auth_method", method)
         .map_err(AppError::db)?;
 
     let remote_has_content =
@@ -256,7 +264,7 @@ pub async fn github_device_flow_poll(
                 result: None,
             }),
             github_api::DevicePollOutcome::Authorized { token } => {
-                let result = connect_with_token(&store, &token, repo_name.trim())?;
+                let result = connect_with_token(&store, &token, repo_name.trim(), "oauth")?;
                 Ok(GithubDevicePollResult {
                     status: "connected".to_string(),
                     result: Some(result),
@@ -318,6 +326,7 @@ fn disconnect_local(store: &SkillStore, skills_dir: &Path) -> Result<(), AppErro
     store
         .set_setting("git_backup_remote_url", "")
         .map_err(AppError::db)?;
+    let _ = store.set_setting("github_auth_method", "");
 
     for host in hosts {
         if let Err(e) = git_credentials::delete_credential(&host) {
@@ -437,6 +446,14 @@ fn run_sync_blocking(
 
     // Local changes first — they must be safe before any network step.
     sync_metadata::write_all_from_db_unlocked(store)?;
+    // Rebuild the oversized exclusions BEFORE the dirty check: a previously
+    // excluded skill that shrank below the limit re-enters the backup by
+    // making .gitignore (and the skill itself) show up as changes.
+    if let Err(e) =
+        git_backup::apply_oversized_exclusions(skills_dir, git_backup::SKILL_SIZE_LIMIT_BYTES)
+    {
+        log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
+    }
     let mut committed = false;
     if git_backup::has_uncommitted_changes(skills_dir)? {
         git_backup::commit_all_unlocked(skills_dir, message)?;

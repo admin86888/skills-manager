@@ -157,7 +157,9 @@
       "deviceDenied": "授權在 GitHub 上被拒絕，未做任何變更。",
       "deviceFallbackPat": "如果你的網路存取 github.com 不穩定，可改用下方的個人存取權杖方式。",
       "patToggle": "改用個人存取權杖（進階）",
-      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。"
+      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。",
+      "reconnect": "重新連線 GitHub",
+      "reconnectTitle": "重新連線 GitHub"
     },
     "history": {
       "title": "備份歷史",
@@ -175,13 +177,27 @@
       },
       "sizeHint": "超大的技能目錄會拖慢備份。規劃中的預設限制是單一技能目錄 100 MB，超限技能保留在本機。",
       "repoTooLarge": "備份總大小為 {{size}}——超過 1 GB 後備份可能變慢。",
-      "oversizedSkill": "「{{name}}」大小為 {{size}}——超過 100 MB 的技能可能拖慢備份。"
+      "oversizedSkill": "「{{name}}」大小為 {{size}}——已在備份中；超大技能可能拖慢備份。",
+      "oversizedExcluded": "「{{name}}」大小為 {{size}}——超過 100 MB 上限，僅保留在本機，不參與備份。"
     },
     "disconnect": {
       "title": "斷開本機",
       "desc": "僅移除本機的備份連線和儲存的存取憑證。本地技能與遠端備份資料都會保留。",
       "confirmTitle": "斷開備份？",
-      "confirmMessage": "將移除本機儲存的遠端連線和存取憑證。本地技能與遠端儲存庫不受影響。"
+      "confirmMessage": "將移除本機儲存的遠端連線和存取憑證。本地技能與遠端儲存庫不受影響。",
+      "revoke": "撤銷授權",
+      "revokeHintOauth": "在 GitHub 撤銷授權會使該帳號下所有裝置的授權全部失效，各裝置需重新連線。",
+      "revokeHintPat": "在 GitHub 刪除該 token 只影響使用它的裝置。",
+      "revokeConfirmTitle": "撤銷 GitHub 授權？",
+      "revokeConfirmOauth": "將開啟 GitHub 的應用授權管理頁面，請在那裡移除「skills-manager」。撤銷後該帳號下所有裝置的授權都會失效；本機連線會立即斷開。遠端備份資料保留。",
+      "revokeConfirmPat": "將開啟 GitHub 的 token 管理頁面，請在那裡刪除備份所用的 token。使用該 token 的裝置會失去存取；本機連線會立即斷開。遠端備份資料保留。",
+      "revokeHintUnknown": "本機的連線方式未被記錄——將同時開啟應用授權和 token 兩個管理頁面，請撤銷實際使用的那個。",
+      "revokeConfirmUnknown": "將同時開啟 GitHub 的應用授權管理和 token 管理頁面，請撤銷本機實際使用的那一種。本機連線會立即斷開。遠端備份資料保留。",
+      "deleteRemote": "刪除遠端備份",
+      "deleteRemoteDesc": "從 GitHub 永久刪除備份儲存庫，其他裝置將無法再同步。本機技能保留。",
+      "deleteRemoteAction": "開啟刪除頁面",
+      "deleteRemoteConfirm": "將開啟 GitHub 的儲存庫設定頁面，請在頁面底部 Danger Zone 中刪除儲存庫——GitHub 會要求輸入儲存庫名稱二次確認。刪除後其他裝置同步時會提示遠端不存在。",
+      "deleteRemoteOpened": "已在瀏覽器開啟儲存庫設定頁面。刪除完成後，可用「斷開本機」清除本機連線。"
     },
     "summary": {
       "title": "技能庫概覽",
@@ -259,6 +275,8 @@
     "gitRepoNeedRemote": "先設定遠端倉庫",
     "gitRepoFixSetup": "修復同步設定",
     "gitSyncSuccessWithVersion": "同步完成 · 快照 {{tag}}",
+    "needsAttention": "需要處理",
+    "needsAttentionHint": "此技能存在同步衝突——點擊前往備份頁處理",
     "gitInlineUpToDate": "Git · 已最新",
     "gitInlineNotConfigured": "Git · 未設定備份",
     "gitInlineNeedFix": "Git · 同步設定需要修復",

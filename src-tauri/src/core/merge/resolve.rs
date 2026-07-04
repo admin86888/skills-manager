@@ -137,13 +137,40 @@ fn apply_use_remote(
     // instead of a half-replaced skill that the next auto backup commits.
     let target_path = free_path_for(skills_dir, &theirs_skill.meta.path, skill_id)?;
     let staged = stage_skill_extract(repo, content, skills_dir)?;
-    if let Some(meta) = &local_meta {
-        let dir = skills_dir.join(&meta.path);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
+    // Overlapping paths (equal, or one nested inside the other — e.g. local
+    // `alpha` vs remote `alpha/beta`) must remove the local dir FIRST, or the
+    // removal would take the freshly placed remote content with it. The
+    // staged copy outside the library keeps the remote version safe either
+    // way; only for fully disjoint paths is the local dir kept until the new
+    // content has landed.
+    let local_path = local_meta.as_ref().map(|meta| meta.path.as_str());
+    let overlaps = local_path.map(|local| {
+        local == target_path
+            || target_path.starts_with(&format!("{local}/"))
+            || local.starts_with(&format!("{target_path}/"))
+    });
+    if overlaps == Some(true) {
+        if let Some(meta) = &local_meta {
+            let dir = skills_dir.join(&meta.path);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+        }
+        place_staged(&staged, skills_dir, &target_path)?;
+    } else {
+        place_staged(&staged, skills_dir, &target_path)?;
+        if let Some(meta) = &local_meta {
+            let dir = skills_dir.join(&meta.path);
+            if dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    let _ = std::fs::remove_dir_all(skills_dir.join(&target_path));
+                    return Err(e).with_context(|| {
+                        format!("failed to remove local skill {}", dir.display())
+                    });
+                }
+            }
         }
     }
-    place_staged(&staged, skills_dir, &target_path)?;
 
     let meta = SkillMetaFile {
         schema_version: theirs_skill.meta.schema_version,
@@ -235,24 +262,30 @@ fn write_worktree_meta(skills_dir: &Path, meta: &SkillMetaFile) -> Result<()> {
 /// local skills' metadata): `wanted`, then `wanted (2)`, `(3)`, …
 fn free_path_for(skills_dir: &Path, wanted: &str, own_id: &str) -> Result<String> {
     let mut occupied: BTreeSet<String> = BTreeSet::new();
+    let mut own_path: Option<String> = None;
     let meta_dir = skills_dir.join(snapshot::METADATA_DIR).join("skills");
     if meta_dir.is_dir() {
         for entry in std::fs::read_dir(&meta_dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if path.file_stem().map(|s| s.to_string_lossy() == own_id).unwrap_or(false) {
-                    continue;
-                }
                 if let Ok(raw) = std::fs::read_to_string(&path) {
                     if let Ok(meta) = serde_json::from_str::<SkillMetaFile>(&raw) {
+                        if path.file_stem().map(|s| s.to_string_lossy() == own_id).unwrap_or(false) {
+                            own_path = Some(meta.path);
+                            continue;
+                        }
                         occupied.insert(meta.path_key);
                     }
                 }
             }
         }
     }
-    if !occupied.contains(&path_key(wanted)) {
+    let is_free = |candidate: &str, occupied: &BTreeSet<String>, own_path: Option<&str>| {
+        !occupied.contains(&path_key(candidate))
+            && (own_path == Some(candidate) || !skills_dir.join(candidate).exists())
+    };
+    if is_free(wanted, &occupied, own_path.as_deref()) {
         return Ok(wanted.to_string());
     }
     for n in 2..1000 {
@@ -260,7 +293,7 @@ fn free_path_for(skills_dir: &Path, wanted: &str, own_id: &str) -> Result<String
             Some((dir, name)) => format!("{dir}/{name} ({n})"),
             None => format!("{wanted} ({n})"),
         };
-        if !occupied.contains(&path_key(&candidate)) {
+        if is_free(&candidate, &occupied, own_path.as_deref()) {
             return Ok(candidate);
         }
     }

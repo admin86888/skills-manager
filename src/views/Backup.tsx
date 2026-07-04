@@ -112,6 +112,12 @@ export function Backup() {
   const [autoBackupSaving, setAutoBackupSaving] = useState(false);
   const [pendingConflicts, setPendingConflicts] = useState<api.PendingConflict[]>([]);
   const [resolvingConflict, setResolvingConflict] = useState<string | null>(null);
+  // §3.1 disconnect matrix rows 2–3 + reconnect guidance after revocation.
+  const [authMethod, setAuthMethod] = useState("");
+  const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
+  const [deleteRemoteConfirmOpen, setDeleteRemoteConfirmOpen] = useState(false);
+  const [reconnectMode, setReconnectMode] = useState(false);
+  const [backupErrorRaw, setBackupErrorRaw] = useState("");
 
   // Abandon an in-flight device-flow poll loop when leaving the page.
   useEffect(() => () => {
@@ -197,8 +203,14 @@ export function Backup() {
       api.getSettings("backup_last_auto_error")
         .then((v) => {
           const raw = (v ?? "").trim();
-          if (raw) setBackupError(mapGitError(raw));
+          if (raw) {
+            setBackupError(mapGitError(raw));
+            setBackupErrorRaw(raw);
+          }
         })
+        .catch(() => {});
+      api.getSettings("github_auth_method")
+        .then((v) => setAuthMethod((v ?? "").trim()))
         .catch(() => {});
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       setRemoteInput(savedRemote);
@@ -218,6 +230,7 @@ export function Backup() {
       "backup-auto-completed",
       (event) => {
         setBackupError(event.payload.error ? mapGitError(event.payload.error) : null);
+        setBackupErrorRaw(event.payload.error ?? "");
         void refreshGitStatus();
         void refreshVersions();
         void refreshPendingConflicts();
@@ -454,9 +467,11 @@ export function Backup() {
         toast.success(t("settings.gitUpToDate"));
       }
       setBackupError(null);
+      setBackupErrorRaw("");
       await Promise.all([refreshGitStatus(true), refreshVersions()]);
     } catch (error) {
       setBackupError(mapGitError(error));
+      setBackupErrorRaw(getErrorMessage(error, ""));
       const message = getErrorMessage(error, "");
       if (message.includes("pending on both devices")) {
         // Object-merge block (§4 双侧声明): the fix is resolving the pending
@@ -522,6 +537,12 @@ export function Backup() {
   /** Shared tail of both connect paths: wire the repo locally and either
    * restore the existing backup or push the first one. */
   const finishGithubConnect = async (res: api.GithubBackupConnectResult) => {
+    setReconnectMode(false);
+    setBackupError(null);
+    setBackupErrorRaw("");
+    api.getSettings("github_auth_method")
+      .then((v) => setAuthMethod((v ?? "").trim()))
+      .catch(() => {});
     setRemoteInput(res.url);
     setRemoteConfig(res.url);
     if (res.repo_created) {
@@ -664,6 +685,54 @@ export function Backup() {
     }
   };
 
+  // Must match core/github_api.rs OAUTH_CLIENT_ID (public device-flow id).
+  const GITHUB_OAUTH_CLIENT_ID = "Ov23li4a3SMdhIiKo7IE";
+  const remoteUrlValue = gitStatus?.remote_url || remoteConfig || "";
+  const isGithubRemote = remoteUrlValue.includes("github.com");
+  const githubRepoWebUrl = (() => {
+    const match = remoteUrlValue.match(/github\.com[/:]([^/]+\/[^/]+?)(\.git)?$/);
+    return match ? `https://github.com/${match[1]}` : null;
+  })();
+  // Token revoked/expired on the GitHub side → offer an explicit reconnect
+  // instead of only a failure card (backup redesign Phase 2 待办).
+  const authErrorNeedsReconnect =
+    isGithubRemote
+    && /authentication failed|401|403|invalid.{0,24}(credentials|token)|could not read username/i.test(
+      backupErrorRaw,
+    );
+
+  // §3.1 row 2: revoking is done on GitHub's side (a public device-flow app
+  // has no client secret, so tokens cannot be revoked via API) — open the
+  // right page and disconnect this machine.
+  const handleRevokeAuthorization = async () => {
+    setRevokeConfirmOpen(false);
+    const oauthUrl = `https://github.com/settings/connections/applications/${GITHUB_OAUTH_CLIENT_ID}`;
+    const patUrl = "https://github.com/settings/tokens";
+    if (authMethod === "pat") {
+      openUrl(patUrl).catch(() => {});
+    } else if (authMethod === "oauth") {
+      openUrl(oauthUrl).catch(() => {});
+    } else {
+      // Connected before the method was recorded (or wired manually): the
+      // credential could be either kind — open both pages so nothing stays
+      // silently authorized.
+      openUrl(oauthUrl).catch(() => {});
+      openUrl(patUrl).catch(() => {});
+    }
+    await handleDisconnect();
+  };
+
+  // §3.1 row 3: repo deletion needs the `delete_repo` scope our tokens
+  // deliberately don't have — GitHub's own settings page (with its type-the-
+  // repo-name confirmation) is the safe double-confirm path.
+  const handleOpenDeleteRemote = () => {
+    setDeleteRemoteConfirmOpen(false);
+    if (githubRepoWebUrl) {
+      openUrl(`${githubRepoWebUrl}/settings#danger-zone`).catch(() => {});
+      toast.info(t("backup.disconnect.deleteRemoteOpened"), { duration: 12000 });
+    }
+  };
+
   const StatusIcon = statusMeta.icon;
   const canBackupNow = mode === "pending_changes" || mode === "up_to_date";
   const remoteLabel = gitStatus?.remote_url || remoteConfig || t("backup.connection.none");
@@ -754,6 +823,17 @@ export function Backup() {
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {authErrorNeedsReconnect && (
+                  <button
+                    type="button"
+                    onClick={() => setReconnectMode(true)}
+                    disabled={!!loading}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-amber-500/40 bg-amber-500/10 px-3 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-500/15 disabled:opacity-50 dark:text-amber-300"
+                  >
+                    <Github className="h-3.5 w-3.5" />
+                    {t("backup.github.reconnect")}
+                  </button>
+                )}
                 {mode === "needs_fix" ? (
                   <button
                     type="button"
@@ -871,11 +951,13 @@ export function Backup() {
             </section>
           )}
 
-          {!gitStatus?.remote_url && !remoteConfig && (
+          {(reconnectMode || (!gitStatus?.remote_url && !remoteConfig)) && (
             <section className="app-panel p-4">
               <div className="mb-3 flex items-center gap-2">
                 <Github className="h-4 w-4 text-muted" />
-                <h2 className="text-[14px] font-semibold text-secondary">{t("backup.github.title")}</h2>
+                <h2 className="text-[14px] font-semibold text-secondary">
+                  {reconnectMode ? t("backup.github.reconnectTitle") : t("backup.github.title")}
+                </h2>
               </div>
               <p className="mb-3 text-[13px] leading-5 text-muted">{t("backup.github.desc")}</p>
 
@@ -1107,7 +1189,9 @@ export function Backup() {
                 )}
                 {sizeReport.oversized.map((skill) => (
                   <div key={skill.name}>
-                    {t("backup.scope.oversizedSkill", { name: skill.name, size: formatBytes(skill.bytes) })}
+                    {skill.excluded
+                      ? t("backup.scope.oversizedExcluded", { name: skill.name, size: formatBytes(skill.bytes) })
+                      : t("backup.scope.oversizedSkill", { name: skill.name, size: formatBytes(skill.bytes) })}
                   </div>
                 ))}
               </div>
@@ -1152,15 +1236,55 @@ export function Backup() {
               <h2 className="text-[14px] font-semibold text-secondary">{t("backup.disconnect.title")}</h2>
             </div>
             <p className="text-[13px] leading-5 text-muted">{t("backup.disconnect.desc")}</p>
-            <button
-              type="button"
-              onClick={() => setDisconnectConfirmOpen(true)}
-              disabled={loading === "disconnect" || (!remoteConfig && !gitStatus?.remote_url)}
-              className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border bg-surface-hover px-2.5 text-[13px] font-medium text-tertiary transition-colors hover:bg-surface-active disabled:opacity-50"
-            >
-              {loading === "disconnect" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlink className="h-3.5 w-3.5" />}
-              {t("settings.gitDisconnect")}
-            </button>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDisconnectConfirmOpen(true)}
+                disabled={loading === "disconnect" || (!remoteConfig && !gitStatus?.remote_url)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border bg-surface-hover px-2.5 text-[13px] font-medium text-tertiary transition-colors hover:bg-surface-active disabled:opacity-50"
+              >
+                {loading === "disconnect" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlink className="h-3.5 w-3.5" />}
+                {t("settings.gitDisconnect")}
+              </button>
+              {isGithubRemote && (
+                <button
+                  type="button"
+                  onClick={() => setRevokeConfirmOpen(true)}
+                  disabled={loading === "disconnect"}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border bg-surface-hover px-2.5 text-[13px] font-medium text-tertiary transition-colors hover:bg-surface-active disabled:opacity-50"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {t("backup.disconnect.revoke")}
+                </button>
+              )}
+            </div>
+            {isGithubRemote && (
+              <p className="mt-2 text-[12px] leading-4 text-faint">
+                {authMethod === "pat"
+                  ? t("backup.disconnect.revokeHintPat")
+                  : authMethod === "oauth"
+                    ? t("backup.disconnect.revokeHintOauth")
+                    : t("backup.disconnect.revokeHintUnknown")}
+              </p>
+            )}
+            {githubRepoWebUrl && (
+              <div className="mt-3 rounded-[6px] border border-red-500/40 bg-red-500/10 px-3 py-2.5">
+                <div className="text-[13px] font-medium text-red-700 dark:text-red-300">
+                  {t("backup.disconnect.deleteRemote")}
+                </div>
+                <p className="mt-1 text-[12px] leading-4 text-red-700/80 dark:text-red-300/80">
+                  {t("backup.disconnect.deleteRemoteDesc")}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setDeleteRemoteConfirmOpen(true)}
+                  className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-[4px] border border-red-500/50 px-2.5 text-[12px] font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-300"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {t("backup.disconnect.deleteRemoteAction")}
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="app-panel p-4">
@@ -1196,6 +1320,27 @@ export function Backup() {
         confirmLabel={t("settings.gitDisconnect")}
         onClose={() => setDisconnectConfirmOpen(false)}
         onConfirm={handleDisconnect}
+      />
+      <ConfirmDialog
+        open={revokeConfirmOpen}
+        title={t("backup.disconnect.revokeConfirmTitle")}
+        message={authMethod === "pat"
+          ? t("backup.disconnect.revokeConfirmPat")
+          : authMethod === "oauth"
+            ? t("backup.disconnect.revokeConfirmOauth")
+            : t("backup.disconnect.revokeConfirmUnknown")}
+        tone="warning"
+        confirmLabel={t("backup.disconnect.revoke")}
+        onClose={() => setRevokeConfirmOpen(false)}
+        onConfirm={handleRevokeAuthorization}
+      />
+      <ConfirmDialog
+        open={deleteRemoteConfirmOpen}
+        title={t("backup.disconnect.deleteRemoteAction")}
+        message={t("backup.disconnect.deleteRemoteConfirm")}
+        confirmLabel={t("backup.disconnect.deleteRemoteAction")}
+        onClose={() => setDeleteRemoteConfirmOpen(false)}
+        onConfirm={handleOpenDeleteRemote}
       />
       <GitSetupDialog
         open={setupOpen}

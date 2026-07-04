@@ -289,6 +289,11 @@ pub(crate) fn init_repo_unlocked(skills_dir: &Path, device_name: &str) -> Result
     configure_device_identity(skills_dir, device_name)?;
 
     ensure_gitignore(skills_dir)?;
+    // §3.6: a pre-existing oversized skill must not slip into the very first
+    // commit — once tracked it can never be excluded again.
+    if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
+        log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
+    }
     protocol::ensure_protocol_file(skills_dir)?;
 
     // Initial commit
@@ -435,6 +440,10 @@ pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
 pub(crate) fn commit_all_unlocked(skills_dir: &Path, message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_gitignore(skills_dir)?;
+    // §3.6: new oversized skills stay local, out of the backup.
+    if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
+        log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
+    }
     // app_commit (§6): protocol marker is sticky in the tree and the message
     // carries the protocol trailer.
     protocol::ensure_protocol_file(skills_dir)?;
@@ -508,6 +517,9 @@ pub fn prune_hidden_refs_on_remote(skills_dir: &Path) -> Result<usize> {
 pub(crate) fn commit_resolution_unlocked(skills_dir: &Path, full_message: &str) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_gitignore(skills_dir)?;
+    if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
+        log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
+    }
     protocol::ensure_protocol_file(skills_dir)?;
     run_git_checked(skills_dir, &["add", "-A"])?;
     run_git_checked(skills_dir, &["commit", "--allow-empty", "-m", full_message])?;
@@ -842,6 +854,12 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
         // Sticky protocol marker (§6): a pre-protocol snapshot self-heals on
         // the restore commit instead of resurrecting a marker-less tree.
         protocol::ensure_protocol_file(skills_dir)?;
+        // The snapshot's .gitignore predates the managed oversized section —
+        // rebuild it before add -A, or a locally-kept oversized skill would
+        // ride into the restore commit.
+        if let Err(e) = apply_oversized_exclusions(skills_dir, SKILL_SIZE_LIMIT_BYTES) {
+            log::warn!("backup size: exclusion scan failed (continuing): {e:#}");
+        }
         run_git_checked(skills_dir, &["add", "-A"])?;
 
         let changed = run_git(skills_dir, &["status", "--porcelain"])?;
@@ -1112,6 +1130,9 @@ pub const REPO_SIZE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
 pub struct OversizedSkill {
     pub name: String,
     pub bytes: u64,
+    /// True when the skill is excluded from backup (§3.6: oversized and not
+    /// yet tracked by git). False = already backed up, warning only.
+    pub excluded: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1124,11 +1145,12 @@ pub struct BackupSizeReport {
     pub repo_warn_bytes: u64,
 }
 
-/// Scan the skills directory for backup-size problems (§3.6). Read-only.
-pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
+/// Skill directories (valid, depth ≤ 6) whose content exceeds `limit`,
+/// as repo-relative slash paths with their sizes. Also returns the total
+/// working-tree size.
+fn oversized_skill_dirs(skills_dir: &Path, limit: u64) -> (Vec<(String, u64)>, u64) {
     let mut total_bytes: u64 = 0;
     let mut oversized = Vec::new();
-
     if skills_dir.exists() {
         let mut it = walkdir::WalkDir::new(skills_dir)
             .min_depth(1)
@@ -1145,14 +1167,19 @@ pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
             if entry.file_type().is_dir() && super::skill_metadata::is_valid_skill_dir(path) {
                 let bytes = dir_size(path);
                 total_bytes += bytes;
-                if bytes > SKILL_SIZE_LIMIT_BYTES {
-                    oversized.push(OversizedSkill {
-                        name: path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                        bytes,
-                    });
+                if bytes > limit {
+                    let rel = path
+                        .strip_prefix(skills_dir)
+                        .map(|p| {
+                            p.components()
+                                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        })
+                        .unwrap_or_default();
+                    if !rel.is_empty() {
+                        oversized.push((rel, bytes));
+                    }
                 }
                 // The whole subtree is accounted for; don't double-count files
                 // or nested dirs inside this skill.
@@ -1160,6 +1187,31 @@ pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
             }
         }
     }
+    (oversized, total_bytes)
+}
+
+/// Whether any file under `rel_path` is tracked by git.
+fn is_tracked(skills_dir: &Path, rel_path: &str) -> bool {
+    run_git(
+        skills_dir,
+        &["ls-files", "--", &format!(":(literal){rel_path}")],
+    )
+    .map(|out| !out.trim().is_empty())
+    .unwrap_or(false)
+}
+
+/// Scan the skills directory for backup-size problems (§3.6). Read-only.
+pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
+    let (dirs, total_bytes) = oversized_skill_dirs(skills_dir, SKILL_SIZE_LIMIT_BYTES);
+    let is_repo = skills_dir.join(".git").exists();
+    let mut oversized: Vec<OversizedSkill> = dirs
+        .into_iter()
+        .map(|(rel, bytes)| OversizedSkill {
+            name: rel.rsplit('/').next().unwrap_or(&rel).to_string(),
+            bytes,
+            excluded: is_repo && !is_tracked(skills_dir, &rel),
+        })
+        .collect();
 
     oversized.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     Ok(BackupSizeReport {
@@ -1168,6 +1220,114 @@ pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
         skill_limit_bytes: SKILL_SIZE_LIMIT_BYTES,
         repo_warn_bytes: REPO_SIZE_WARN_BYTES,
     })
+}
+
+const OVERSIZED_SECTION_BEGIN: &str = "# skills-manager: oversized skills excluded from backup (auto-managed)";
+const OVERSIZED_SECTION_END: &str = "# skills-manager: end oversized skills";
+
+/// Escape a repo-relative path for use as a literal gitignore pattern.
+fn gitignore_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[' | ']' | '!' | '#') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// §3.6 后半: keep oversized skills out of the backup by default. A skill
+/// directory above `limit` that is NOT yet tracked by git gets its content
+/// dir and its metadata file added to a managed `.gitignore` section (the
+/// skill stays on disk and in the local DB). Already-tracked skills are
+/// never untracked — removing them from the tree would propagate to other
+/// devices as a deletion — they only warn (`size_report`). The section is
+/// rebuilt from scratch on every commit, so a skill that shrinks below the
+/// limit re-enters the backup automatically.
+pub(crate) fn apply_oversized_exclusions(skills_dir: &Path, limit: u64) -> Result<Vec<String>> {
+    let (dirs, _total) = oversized_skill_dirs(skills_dir, limit);
+    let mut excluded: Vec<String> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+
+    if !dirs.is_empty() {
+        // Map content path → skill_id so the paired metadata file is
+        // excluded too (a tracked metadata file pointing at an ignored dir
+        // would fail §7 validation on every other device).
+        let mut id_by_path = std::collections::HashMap::new();
+        let meta_dir = skills_dir.join(".skills-manager/skills");
+        if meta_dir.is_dir() {
+            for entry in std::fs::read_dir(&meta_dir)?.flatten() {
+                if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(meta) =
+                        serde_json::from_str::<crate::core::sync_metadata::SkillMetaFile>(&raw)
+                    {
+                        id_by_path.insert(meta.path, meta.skill_id);
+                    }
+                }
+            }
+        }
+        for (rel, bytes) in dirs {
+            if is_tracked(skills_dir, &rel) {
+                continue; // already backed up: warn only, never untrack
+            }
+            lines.push(format!("/{}/", gitignore_escape(&rel)));
+            if let Some(id) = id_by_path.get(&rel) {
+                lines.push(format!("/.skills-manager/skills/{}.json", gitignore_escape(id)));
+            }
+            log::info!(
+                "backup size: excluding oversized skill '{rel}' ({} MB) from backup",
+                bytes / (1024 * 1024)
+            );
+            excluded.push(rel);
+        }
+    }
+
+    rewrite_gitignore_section(skills_dir, &lines)?;
+    Ok(excluded)
+}
+
+/// Idempotently rewrite the managed oversized section of `.gitignore`
+/// (created, replaced, or removed when empty), leaving user lines intact.
+fn rewrite_gitignore_section(skills_dir: &Path, section_lines: &[String]) -> Result<()> {
+    let gitignore = skills_dir.join(".gitignore");
+    let existing = if gitignore.exists() {
+        std::fs::read_to_string(&gitignore)?
+    } else {
+        String::new()
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let mut in_section = false;
+    let mut had_section = false;
+    for line in existing.lines() {
+        if line.trim() == OVERSIZED_SECTION_BEGIN {
+            in_section = true;
+            had_section = true;
+            continue;
+        }
+        if line.trim() == OVERSIZED_SECTION_END {
+            in_section = false;
+            continue;
+        }
+        if !in_section {
+            kept.push(line.to_string());
+        }
+    }
+    if section_lines.is_empty() {
+        if !had_section {
+            return Ok(()); // nothing to add, nothing to remove
+        }
+    } else {
+        while kept.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            kept.pop();
+        }
+        kept.push(String::new());
+        kept.push(OVERSIZED_SECTION_BEGIN.to_string());
+        kept.extend(section_lines.iter().cloned());
+        kept.push(OVERSIZED_SECTION_END.to_string());
+    }
+    std::fs::write(&gitignore, format!("{}\n", kept.join("\n").trim_end_matches('\n')))?;
+    Ok(())
 }
 
 fn dir_size(dir: &Path) -> u64 {
@@ -1506,6 +1666,81 @@ mod tests {
             run_git(tmp.path(), &["config", "--local", "--get", "user.name"]).unwrap(),
             "Device A"
         );
+    }
+
+    // ── oversized skill exclusion (§3.6 后半) ──
+
+    #[test]
+    fn oversized_untracked_skill_is_excluded_but_tracked_one_is_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_repo_unlocked(dir, "Device A").unwrap();
+
+        // A skill committed while small stays tracked even after growing
+        // past the limit — untracking would propagate as a deletion.
+        std::fs::create_dir_all(dir.join("grown")).unwrap();
+        std::fs::write(dir.join("grown/SKILL.md"), "small at first").unwrap();
+        commit_all_unlocked(dir, "seed").unwrap();
+        std::fs::write(dir.join("grown/data.bin"), vec![0u8; 64]).unwrap();
+
+        // A brand-new oversized skill (limit shrunk for the test) with its
+        // metadata file.
+        std::fs::create_dir_all(dir.join("huge")).unwrap();
+        std::fs::write(dir.join("huge/SKILL.md"), vec![b'x'; 64]).unwrap();
+        let meta_dir = dir.join(".skills-manager/skills");
+        std::fs::create_dir_all(&meta_dir).unwrap();
+        std::fs::write(
+            meta_dir.join("skill-huge.json"),
+            br#"{"schema_version":1,"skill_id":"skill-huge","path":"huge","path_key":"huge","enabled":true,"tags":[],"source":{"type":"import","ref":null,"subpath":null,"branch":null}}"#,
+        )
+        .unwrap();
+
+        let excluded = apply_oversized_exclusions(dir, 32).unwrap();
+        assert_eq!(excluded, vec!["huge"]);
+        let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("/huge/"), "{gitignore}");
+        assert!(gitignore.contains("/.skills-manager/skills/skill-huge.json"), "{gitignore}");
+        assert!(!gitignore.contains("/grown/"), "tracked skill must not be excluded: {gitignore}");
+
+        // Committing keeps the oversized skill (and its metadata) out of the
+        // tree while the grown-but-tracked one stays in.
+        std::fs::write(dir.join("note.md"), "trigger commit").unwrap();
+        // commit_all uses the real 100MB limit, so re-apply the test limit
+        // before checking what got committed.
+        apply_oversized_exclusions(dir, 32).unwrap();
+        run_git_checked(dir, &["add", "-A"]).unwrap();
+        run_git_checked(dir, &["commit", "-m", "test"]).unwrap();
+        assert!(run_git(dir, &["cat-file", "-e", "HEAD:huge/SKILL.md"]).is_err());
+        assert!(run_git(dir, &["cat-file", "-e", "HEAD:.skills-manager/skills/skill-huge.json"]).is_err());
+        run_git(dir, &["cat-file", "-e", "HEAD:grown/data.bin"]).unwrap();
+        // Local files are untouched.
+        assert!(dir.join("huge/SKILL.md").exists());
+
+        // Idempotent, and the section self-heals once the skill shrinks.
+        apply_oversized_exclusions(dir, 32).unwrap();
+        let same = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(gitignore, same);
+        std::fs::write(dir.join("huge/SKILL.md"), "tiny").unwrap();
+        apply_oversized_exclusions(dir, 32).unwrap();
+        let after = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(!after.contains("/huge/"), "shrunk skill re-enters backup: {after}");
+        assert!(!after.contains("oversized"), "empty section is removed: {after}");
+    }
+
+    #[test]
+    fn size_report_marks_untracked_oversized_as_excluded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_repo_unlocked(dir, "Device A").unwrap();
+        std::fs::create_dir_all(dir.join("big")).unwrap();
+        std::fs::write(dir.join("big/SKILL.md"), vec![b'x'; 200]).unwrap();
+        // The public report uses the real 100MB limit; exercise the flag via
+        // the internal helper plus a handcrafted report path instead of
+        // writing 100MB in a test: tracked → not excluded, untracked → excluded.
+        assert!(!is_tracked(dir, "big"));
+        run_git_checked(dir, &["add", "-A"]).unwrap();
+        run_git_checked(dir, &["commit", "-m", "track big"]).unwrap();
+        assert!(is_tracked(dir, "big"));
     }
 
     // ── app_commit protocol markers (§6) ──

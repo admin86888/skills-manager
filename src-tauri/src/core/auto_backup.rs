@@ -238,6 +238,13 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Outcome {
     if let Err(e) = sync_metadata::write_all_from_db_unlocked(store) {
         return Outcome::Failed(format!("{e:#}"));
     }
+    // Before the dirty check, so a shrunk previously-excluded skill re-enters
+    // the backup via the resulting .gitignore change (§3.6).
+    if let Err(e) =
+        git_backup::apply_oversized_exclusions(&skills_dir, git_backup::SKILL_SIZE_LIMIT_BYTES)
+    {
+        log::debug!("auto backup: exclusion scan failed (continuing): {e:#}");
+    }
 
     let mut committed = false;
     match git_backup::has_uncommitted_changes(&skills_dir) {

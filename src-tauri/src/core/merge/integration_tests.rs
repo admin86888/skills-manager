@@ -370,6 +370,48 @@ fn resolve_use_remote_adopts_pinned_version() {
 }
 
 #[test]
+fn resolve_use_remote_avoids_existing_ignored_target_path() {
+    let env = setup();
+    let (a, b) = seeded_pair(&env);
+
+    // Remote side renames the skill to beta and edits content; local side
+    // edits alpha. The content conflict keeps local alpha and pins remote beta.
+    b.activate();
+    std::fs::rename(b.skills.join("alpha"), b.skills.join("beta")).unwrap();
+    b.write_skill("skill-1", "beta", "edited on B");
+    b.commit("rename and edit on B");
+    b.push();
+
+    a.activate();
+    a.write_skill("skill-1", "alpha", "edited on A");
+    a.commit("edit on A");
+    let summary = a.pull();
+    assert_eq!(summary.new_conflicts, vec!["skill-1"]);
+    assert_eq!(a.skill_md("alpha"), "edited on A");
+
+    // A local ignored directory already occupies beta. UseRemote must not
+    // delete alpha and then fail moving into beta; it should choose beta (2).
+    std::fs::write(a.skills.join(".git/info/exclude"), "beta/\n").unwrap();
+    std::fs::create_dir_all(a.skills.join("beta")).unwrap();
+    std::fs::write(a.skills.join("beta/local.log"), "local ignored data").unwrap();
+
+    resolve_conflict_unlocked(&a.store, &a.skills, "skill-1", ResolveAction::UseRemote).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(a.skills.join("beta/local.log")).unwrap(),
+        "local ignored data"
+    );
+    assert!(!a.skills.join("alpha").exists());
+    assert_eq!(
+        std::fs::read_to_string(a.skills.join("beta (2)/SKILL.md")).unwrap(),
+        "edited on B"
+    );
+    let meta = a.meta_of("skill-1").unwrap();
+    assert_eq!(meta.path, "beta (2)");
+    assert!(a.store.list_pending_conflicts().unwrap().is_empty());
+}
+
+#[test]
 fn resolve_keep_both_duplicates_under_device_suffix() {
     let env = setup();
     let (a, b) = seeded_pair(&env);

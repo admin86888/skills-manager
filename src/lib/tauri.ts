@@ -520,7 +520,8 @@ export interface GitBackupVersion {
 
 export interface GitBackupSizeReport {
   total_bytes: number;
-  oversized: { name: string; bytes: number }[];
+  /** `excluded`: oversized and kept out of the backup (§3.6); false = already tracked, warning only. */
+  oversized: { name: string; bytes: number; excluded: boolean }[];
   skill_limit_bytes: number;
   repo_warn_bytes: number;
 }

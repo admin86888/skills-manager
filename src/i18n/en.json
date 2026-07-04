@@ -157,7 +157,9 @@
       "deviceDenied": "Authorization was declined on GitHub. Nothing was changed.",
       "deviceFallbackPat": "If github.com is hard to reach from your network, use a personal access token below instead.",
       "patToggle": "Use a personal access token instead (advanced)",
-      "publicRepoWarning": "Heads up: the connected backup repository is PUBLIC — anyone can read your skills, tags, and presets. If that's not intended, make it private on GitHub: repository Settings → General → Danger Zone → Change visibility."
+      "publicRepoWarning": "Heads up: the connected backup repository is PUBLIC — anyone can read your skills, tags, and presets. If that's not intended, make it private on GitHub: repository Settings → General → Danger Zone → Change visibility.",
+      "reconnect": "Reconnect GitHub",
+      "reconnectTitle": "Reconnect GitHub"
     },
     "history": {
       "title": "Backup History",
@@ -175,13 +177,27 @@
       },
       "sizeHint": "Very large skill folders may make backups slow. The planned default limit is 100 MB per skill folder, with oversized skills kept local.",
       "repoTooLarge": "Backup is {{size}} in total — past 1 GB backups may get slow.",
-      "oversizedSkill": "\"{{name}}\" is {{size}} — skills over 100 MB may make backups slow."
+      "oversizedSkill": "\"{{name}}\" is {{size}} — already backed up; large skills may make backups slow.",
+      "oversizedExcluded": "\"{{name}}\" is {{size}} — over the 100 MB limit, kept on this machine and not backed up."
     },
     "disconnect": {
       "title": "Disconnect This Machine",
       "desc": "Removes the backup connection and the access credential saved on this machine only. Local skills and remote backup data are kept.",
       "confirmTitle": "Disconnect backup?",
-      "confirmMessage": "This removes the saved remote connection and this machine's access credential. Your local skills and remote repository will remain."
+      "confirmMessage": "This removes the saved remote connection and this machine's access credential. Your local skills and remote repository will remain.",
+      "revoke": "Revoke Authorization",
+      "revokeHintOauth": "Revoking on GitHub invalidates the authorization for ALL devices signed in with this account; each will need to reconnect.",
+      "revokeHintPat": "Deleting the token on GitHub only affects devices using that token.",
+      "revokeConfirmTitle": "Revoke GitHub authorization?",
+      "revokeConfirmOauth": "GitHub's application settings page will open — remove \"skills-manager\" there. This invalidates the authorization on ALL your devices, and this machine will be disconnected now. Remote backup data is kept.",
+      "revokeConfirmPat": "GitHub's token settings page will open — delete the backup token there. Devices using that token lose access, and this machine will be disconnected now. Remote backup data is kept.",
+      "revokeHintUnknown": "How this machine was connected wasn't recorded — both the app-authorization and token pages will open so you can revoke whichever applies.",
+      "revokeConfirmUnknown": "GitHub's app-authorization and token settings pages will both open — revoke whichever this machine was using. This machine will be disconnected now. Remote backup data is kept.",
+      "deleteRemote": "Delete remote backup",
+      "deleteRemoteDesc": "Permanently deletes the backup repository on GitHub. Other devices will no longer be able to sync. Skills on this machine are kept.",
+      "deleteRemoteAction": "Open deletion page",
+      "deleteRemoteConfirm": "The repository settings page on GitHub will open. Delete the repository in its Danger Zone — GitHub asks you to type the repository name to confirm. Afterwards, other devices will report that the backup no longer exists.",
+      "deleteRemoteOpened": "Repository settings opened in the browser. After deleting, use \"Disconnect This Machine\" to clear the local connection."
     },
     "summary": {
       "title": "Library Summary",
@@ -257,6 +273,8 @@
     "gitRepoNeedRemote": "Set remote first",
     "gitRepoFixSetup": "Fix Sync Setup",
     "gitSyncSuccessWithVersion": "Sync completed · Snapshot {{tag}}",
+    "needsAttention": "Needs attention",
+    "needsAttentionHint": "This skill has a sync conflict — open the Backup page to resolve it",
     "gitInlineUpToDate": "Git · Up to date",
     "gitInlineNotConfigured": "Git · Backup not set up",
     "gitInlineNeedFix": "Git · Sync setup needs fixing",
