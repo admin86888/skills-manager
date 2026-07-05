@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.1] - 2026-07-05
+
+### Release Overview
+- Hardening patch from the first real-world multi-device sync: legacy leftovers from older app versions no longer permanently block merging, sync failures show their actual reason, and the Backup page says "sync" instead of "back up" when remote updates are involved.
+
+### User-facing
+- **Legacy leftovers no longer block syncing** — Libraries that were backed up by older app versions could carry invisible remains (skill folders without metadata, half-written temp files committed long ago). The very first real two-device merge hit exactly this and failed permanently with an opaque error. Merging now cleans temp junk out of the merged result automatically and tolerates pre-existing unmanaged folders — they sync along untouched; only inconsistencies a merge itself would introduce still abort.
+- **Failure cards show the real reason** — Sync errors previously displayed only the outermost summary ("object merge aborted") while the actual cause stayed hidden; the full error chain now reaches the Backup page, making failures diagnosable without log spelunking.
+- **"Sync Now" instead of "Back Up Now"** — With "local changes: 0 · remote updates: 1" the button said "Back Up Now", reading like a push that might overwrite the remote. The pending state now distinguishes its three situations: remote-only updates get their own title ("Updates from your other devices"), an explicit "nothing here is uploaded or overwritten" description, and a "Sync Now" button; mixed states say that syncing merges per skill and neither side overwrites the other.
+
+### Developer & Governance
+- Plan-stage input self-heal: residual files inside the managed metadata namespace that the app never writes (`*.tmp.*` atomic-write leftovers, non-JSON strays) are dropped from the merged tree; every commit path also deletes such leftovers from the working tree first — a push-only machine never runs the reconcile cleanup, which is how one got committed in the first place.
+- Validator rule 4 gains a grandfather set: skill dirs already unclaimed in either merge input are tolerated (viewpoint-independent: the union of both tips); the merged tree stays strict about orphans a merge would introduce. Input-tip validation (old-client checks) additionally tolerates committed metadata junk via the new `validate_input_tip`.
+- `classify_git_chain` preserves the full anyhow error chain (`{:#}`) for all backup command errors.
+- A codex review of the incident fixes surfaced two gaps, both fixed: the old-client tip validation still hard-failed on committed temp files, and the legacy-dirt integration test silently lost its "junk already in history" topology because the app's own commit path now cleans temp files — it commits via raw git now and was mutation-verified (disabling the plan-stage drop makes it fail). Backend tests: 377.
 ## [1.28.0] - 2026-07-04
 
 ### Release Overview
