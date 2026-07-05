@@ -96,12 +96,16 @@
       "syncedDesc": "Latest visible snapshot: {{when}}.",
       "noSnapshot": "no snapshot yet",
       "failed": "Backup failed",
-      "pendingSkills": "{{count}} skill(s) have changes not yet backed up."
+      "pendingSkills": "{{count}} skill(s) have changes not yet backed up.",
+      "remoteOnly": "Updates from your other devices",
+      "remoteOnlyDesc": "{{remote}} update(s) were pushed by your other devices. Syncing merges them into this machine — nothing here is uploaded or overwritten.",
+      "pendingBothDesc": "Local changes: {{local}} · remote updates: {{remote}}. Syncing merges both per skill — neither side overwrites the other."
     },
     "actions": {
       "backupNow": "Back Up Now",
       "backupAgain": "Back Up Again",
-      "retry": "Retry Backup"
+      "retry": "Retry Backup",
+      "syncNow": "Sync Now"
     },
     "merge": {
       "applied": "Merged {{count}} update(s) from your other devices.",

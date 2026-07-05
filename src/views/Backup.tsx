@@ -315,20 +315,28 @@ export function Backup() {
           className: "border-red-500/40 bg-red-500/10",
           iconClassName: "text-red-500",
         };
-      case "pending_changes":
+      case "pending_changes": {
+        // Three distinct situations wear this state; naming them precisely
+        // matters because "back up" reads as push-only and makes users fear
+        // overwriting the remote when only remote updates exist.
+        const localCount = Math.max(gitStatus?.ahead ?? 0, gitStatus?.has_changes ? 1 : 0);
+        const remoteCount = gitStatus?.behind ?? 0;
+        const remoteOnly = remoteCount > 0 && localCount === 0;
+        const both = remoteCount > 0 && localCount > 0;
         return {
-          icon: Upload,
-          title: t("backup.status.pending"),
-          description:
-            (gitStatus?.changed_skill_count ?? 0) > 0
-              ? t("backup.status.pendingSkills", { count: gitStatus?.changed_skill_count })
-              : t("backup.status.pendingDesc", {
-                  local: Math.max(gitStatus?.ahead ?? 0, gitStatus?.has_changes ? 1 : 0),
-                  remote: gitStatus?.behind ?? 0,
-                }),
+          icon: remoteOnly ? RefreshCw : Upload,
+          title: remoteOnly ? t("backup.status.remoteOnly") : t("backup.status.pending"),
+          description: remoteOnly
+            ? t("backup.status.remoteOnlyDesc", { remote: remoteCount })
+            : both
+              ? t("backup.status.pendingBothDesc", { local: localCount, remote: remoteCount })
+              : (gitStatus?.changed_skill_count ?? 0) > 0
+                ? t("backup.status.pendingSkills", { count: gitStatus?.changed_skill_count })
+                : t("backup.status.pendingDesc", { local: localCount, remote: remoteCount }),
           className: "border-amber-500/40 bg-amber-500/10",
           iconClassName: "text-amber-600 dark:text-amber-400",
         };
+      }
       case "up_to_date":
         return {
           icon: CheckCircle2,
@@ -869,7 +877,9 @@ export function Backup() {
                       ? t("backup.actions.retry")
                       : mode === "up_to_date"
                         ? t("backup.actions.backupAgain")
-                        : t("backup.actions.backupNow")}
+                        : (gitStatus?.behind ?? 0) > 0
+                          ? t("backup.actions.syncNow")
+                          : t("backup.actions.backupNow")}
                   </button>
                 )}
               </div>

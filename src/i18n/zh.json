@@ -96,12 +96,16 @@
       "syncedDesc": "最近可见快照：{{when}}。",
       "noSnapshot": "暂无快照",
       "failed": "备份失败",
-      "pendingSkills": "有 {{count}} 个技能的更改尚未备份。"
+      "pendingSkills": "有 {{count}} 个技能的更改尚未备份。",
+      "remoteOnly": "其他设备有更新",
+      "remoteOnlyDesc": "其他设备推送了 {{remote}} 项更新。同步会把它们合并到本机——本机不会上传或覆盖任何内容。",
+      "pendingBothDesc": "本地更改：{{local}} · 远端更新：{{remote}}。同步会按技能合并双方的修改——任何一端都不会被覆盖。"
     },
     "actions": {
       "backupNow": "立即备份",
       "backupAgain": "再次备份",
-      "retry": "重试备份"
+      "retry": "重试备份",
+      "syncNow": "立即同步"
     },
     "merge": {
       "applied": "已合并来自其他设备的 {{count}} 项更新。",
