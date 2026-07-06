@@ -7,6 +7,7 @@ import { computePresetStatus } from "../lib/presetStatus";
 import { getPresetIconOption } from "../lib/presetIcons";
 import type { ManagedSkill, Preset } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
+import { HorizontalScrollRow } from "./HorizontalScrollRow";
 
 export interface PresetBarProps {
   presets: Preset[];
@@ -102,7 +103,7 @@ export function PresetBar({
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <span className="shrink-0 text-[12px] text-muted">{t("sidebar.presets")}</span>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto scrollbar-hide">
+      <HorizontalScrollRow>
         {visiblePresets.map((preset) => {
           const s = statuses.get(preset.id)!;
           const presetIcon = getPresetIconOption(preset);
@@ -141,7 +142,7 @@ export function PresetBar({
             </button>
           );
         })}
-      </div>
+      </HorizontalScrollRow>
     </div>
   );
 }
