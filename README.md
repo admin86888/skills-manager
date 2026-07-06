@@ -140,6 +140,18 @@ npm install
 npm run tauri:dev
 ```
 
+### Build (Linux x64)
+
+To produce release `.deb` / `.rpm` packages for `x86_64-unknown-linux-gnu` in
+one shot — with prerequisites checked and npm bootstrap handled for you:
+
+```bash
+npm run build:linux:x64
+```
+
+See [`docs/build-linux-x64.md`](./docs/build-linux-x64.md) for what it checks,
+what it produces, and how updater signing is handled.
+
 ### CLI
 
 The repository includes an agent-friendly CLI built on the same Rust shared core used by the desktop app. Both the CLI and the desktop app go through the same SQLite database, central library, and sync engine.

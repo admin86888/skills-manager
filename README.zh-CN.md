@@ -195,6 +195,16 @@ npm run tauri:build
 npm run cli:build
 ```
 
+一键打包 Linux x64（`x86_64-unknown-linux-gnu`）的 `.deb` / `.rpm` 安装包 ——
+脚本会自动检查前置依赖、按需安装 npm 依赖、并处理本地构建的签名问题：
+
+```bash
+npm run build:linux:x64
+```
+
+详见 [`docs/build-linux-x64.md`](./docs/build-linux-x64.md)（脚本检查项、产物路径、
+updater 签名行为等）。
+
 ## 常见问题
 
 ### macOS 首次启动被 Gatekeeper 拦截
