@@ -1148,8 +1148,21 @@ mod tests {
         // not regress this legitimate root case.
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("SKILL.md"), "---\nname: root-name\n---").unwrap();
+
+        // Matching id resolves to the root via the frontmatter name match.
         let found = find_skill_dir(tmp.path(), Some("root-name")).unwrap();
         assert_eq!(found, tmp.path());
+
+        // Non-matching id on the SAME root-skill repo must error, not fall back
+        // to the root. This proves the positive case above returns the root via
+        // name_match rather than the skill_id==None root fallback — so the test
+        // would fail if the old fall-through were reintroduced.
+        let missing = find_skill_dir(tmp.path(), Some("nope-not-here"));
+        assert!(
+            missing.is_err(),
+            "expected error for non-matching id on a root-skill repo, got {:?}",
+            missing
+        );
     }
 
     #[test]
