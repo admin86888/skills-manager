@@ -1141,6 +1141,18 @@ mod tests {
     }
 
     #[test]
+    fn find_skill_dir_by_id_matches_root_skill_md_name() {
+        // A single-skill repo whose root SKILL.md carries `name: root-name`.
+        // Requesting that id must still resolve to the root via the frontmatter
+        // name match — the #278 bail! only fires when *nothing* matches, and must
+        // not regress this legitimate root case.
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("SKILL.md"), "---\nname: root-name\n---").unwrap();
+        let found = find_skill_dir(tmp.path(), Some("root-name")).unwrap();
+        assert_eq!(found, tmp.path());
+    }
+
+    #[test]
     fn find_skill_dir_fallback_to_root() {
         let tmp = tempdir().unwrap();
         let found = find_skill_dir(tmp.path(), None).unwrap();
