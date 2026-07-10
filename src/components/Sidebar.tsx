@@ -6,6 +6,7 @@ import {
   Layers,
   Globe,
   Download,
+  CloudUpload,
   Settings,
   Plus,
   Pencil,
@@ -167,6 +168,7 @@ export function Sidebar() {
     { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
     { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
+    { name: t("sidebar.backup"), path: "/backup", icon: CloudUpload },
   ];
 
   const handleSwitchPreset = (id: string) => {

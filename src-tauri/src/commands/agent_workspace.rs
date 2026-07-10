@@ -9,8 +9,8 @@ use crate::commands::projects::{
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
-    error::AppError, installer, project_scanner, scenario_service, sync_engine, tool_adapters,
-    tool_service,
+    content_hash, error::AppError, installer, project_scanner, scenario_service, sync_engine,
+    tool_adapters, tool_service,
 };
 
 fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
@@ -337,31 +337,138 @@ fn import_agent_local_skill_to_center(
 /// artifact from the central copy, so acting on a diverged skill could clobber
 /// newer local edits. Diverged stranded skills are left for an explicit user
 /// action. Best-effort: per-skill failures are logged and skipped.
+/// Settings key holding the signature of the stranded-candidate set we last
+/// attempted to backfill. See [`backfill_stranded_agent_targets`] for why.
+const BACKFILL_SIG_KEY: &str = "backfill_stranded_candidates_sig";
+
+/// Change detector for one candidate's on-disk state: the same content hash
+/// the repair itself compares (which ignores junk like `.DS_Store`, so noise
+/// can't churn the gate), plus an existence marker since `hash_directory`
+/// hashes a missing dir like an empty one. Candidates are few, so hashing
+/// just their dirs costs ~ms — nothing like the full scan-and-hash of every
+/// agent the gate exists to avoid. The gate then re-arms exactly when a
+/// candidate's repair inputs changed.
+fn dir_content_fingerprint(path: &str) -> String {
+    if !Path::new(path).exists() {
+        return "missing".to_string();
+    }
+    content_hash::hash_directory(Path::new(path)).unwrap_or_else(|_| "unreadable".to_string())
+}
+
+/// Signature of the current stranded set: skills carrying a non-empty
+/// `source_ref` but no target row. Returns `None` when the set is empty (there
+/// is nothing to repair). The signature is order-independent (ids are sorted)
+/// so it reflects the *set*, not the DB row order.
+///
+/// Beyond the candidate identities it folds in everything cheap that changes
+/// whether a candidate is repairable, so the gate re-arms when repair might
+/// newly succeed — not only when the set itself changes: the available
+/// (installed + enabled) adapter keys, each candidate's DB content hash, and
+/// content fingerprints of its local and central dirs (a diverged local
+/// restored to match center, or center edited to match the local, must
+/// re-arm).
+fn stranded_candidate_signature(
+    all_managed: &[SkillRecord],
+    all_targets: &[SkillTargetRecord],
+    available_tools: &[String],
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+
+    let targeted_skill_ids: HashSet<&str> =
+        all_targets.iter().map(|t| t.skill_id.as_str()).collect();
+    let mut candidates: Vec<(&str, &str, &str, &str)> = all_managed
+        .iter()
+        .filter_map(|managed| {
+            let source_ref = managed.source_ref.as_deref().filter(|s| !s.is_empty())?;
+            if targeted_skill_ids.contains(managed.id.as_str()) {
+                return None;
+            }
+            Some((
+                managed.id.as_str(),
+                source_ref,
+                managed.content_hash.as_deref().unwrap_or(""),
+                managed.central_path.as_str(),
+            ))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates.sort_unstable();
+
+    let mut tools: Vec<&str> = available_tools.iter().map(String::as_str).collect();
+    tools.sort_unstable();
+
+    let mut hasher = Sha256::new();
+    for tool in tools {
+        hasher.update(tool.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update([0xfe]);
+    for (id, source_ref, db_hash, central_path) in candidates {
+        hasher.update(id.as_bytes());
+        hasher.update([0]);
+        hasher.update(source_ref.as_bytes());
+        hasher.update([0]);
+        hasher.update(db_hash.as_bytes());
+        for path in [source_ref, central_path] {
+            hasher.update([0]);
+            hasher.update(dir_content_fingerprint(path).as_bytes());
+        }
+        hasher.update([0xff]);
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
 pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
 
-    // Cheap pre-check: a stranded skill carries a `source_ref` but has no target
-    // row at all. When every source_ref-bearing skill is already targeted there
-    // is nothing to repair, so we skip the filesystem scan entirely.
-    let has_candidate = all_managed.iter().any(|managed| {
-        managed.source_ref.as_deref().is_some_and(|s| !s.is_empty())
-            && !all_targets.iter().any(|t| t.skill_id == managed.id)
-    });
-    if !has_candidate {
+    let disabled = tool_service::get_disabled_tools(store);
+    let adapters = tool_adapters::all_tool_adapters(store);
+    let available_tools: Vec<String> = adapters
+        .iter()
+        .filter(|adapter| adapter.is_installed() && !disabled.contains(&adapter.key))
+        .map(|adapter| adapter.key.clone())
+        .collect();
+
+    // Cheap in-memory pre-check: a stranded skill carries a `source_ref` but has
+    // no target row. When nothing is stranded there is nothing to repair, so we
+    // skip the filesystem scan entirely.
+    let Some(signature) =
+        stranded_candidate_signature(&all_managed, &all_targets, &available_tools)
+    else {
+        return 0;
+    };
+
+    // Second gate (#248): the scan below reads and hashes every agent's local
+    // skills - ~8s on real libraries. Some candidates can never be repaired
+    // (diverged locals we intentionally skip, or skills with no matching local
+    // file), so `has_candidate` alone stayed true forever and re-ran the full
+    // scan on EVERY launch. Skip when the stranded set is byte-identical to the
+    // one we already attempted; a newly-stranded skill, a newly available
+    // adapter, or an on-disk change to a candidate (see the signature docs)
+    // re-arms the scan.
+    if store
+        .get_setting(BACKFILL_SIG_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some(signature.as_str())
+    {
         return 0;
     }
 
-    let disabled = tool_service::get_disabled_tools(store);
     let mut repaired = 0usize;
 
-    for adapter in tool_adapters::all_tool_adapters(store) {
+    for adapter in &adapters {
         if !adapter.is_installed() || disabled.contains(&adapter.key) {
             continue;
         }
         let targets = store.get_all_targets().unwrap_or_default();
 
-        for skill in read_agent_local_skills(&adapter) {
+        for skill in read_agent_local_skills(adapter) {
             let canonical = std::fs::canonicalize(&skill.path).ok();
             let Some(matched) = all_managed
                 .iter()
@@ -391,6 +498,34 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
                 continue;
             }
 
+            // The scan snapshot above can be seconds old on a large library, and
+            // we now run concurrently with the user (post-#248 the backfill is
+            // off the setup path). Re-hash both sides of THIS skill immediately
+            // before writing so an edit made since the scan is never clobbered
+            // by the central copy. One dir each — cheap. Explicit existence
+            // checks because hash_directory treats a missing dir like an empty
+            // one instead of failing.
+            let local_path = Path::new(&skill.path);
+            let center_path = Path::new(&matched.central_path);
+            let fresh_match = local_path.exists()
+                && center_path.exists()
+                && match (
+                    content_hash::hash_directory(local_path),
+                    content_hash::hash_directory(center_path),
+                ) {
+                    (Ok(local), Ok(center)) => local == center,
+                    // Fail closed: if either side can't be read, don't write.
+                    _ => false,
+                };
+            if !fresh_match {
+                log::info!(
+                    "backfill: skipping stranded skill '{}' on agent '{}': content changed since scan",
+                    matched.name,
+                    adapter.key
+                );
+                continue;
+            }
+
             match scenario_service::sync_single_skill_to_tool(store, &matched.id, &adapter.key) {
                 Ok(()) => {
                     repaired += 1;
@@ -413,6 +548,24 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     if repaired > 0 {
         log::info!("backfill: repaired {repaired} stranded agent skill target(s)");
     }
+
+    // Record the stranded set that remains AFTER repairing so an unchanged set
+    // won't trigger the expensive scan again next launch. Recomputed from fresh
+    // targets (repairs above added rows) so it converges in a single launch:
+    // repaired skills drop out, and only the genuinely un-repairable ones seed
+    // the gate. Best-effort: a failed write just means we re-scan next time.
+    let post_targets = store.get_all_targets().unwrap_or_default();
+    match stranded_candidate_signature(&all_managed, &post_targets, &available_tools) {
+        Some(remaining_sig) => {
+            let _ = store.set_setting(BACKFILL_SIG_KEY, &remaining_sig);
+        }
+        // Everything got repaired: clear the gate so a future stranded skill is
+        // never masked by a stale signature.
+        None => {
+            let _ = store.set_setting(BACKFILL_SIG_KEY, "");
+        }
+    }
+
     repaired
 }
 
@@ -452,8 +605,9 @@ fn update_agent_local_skill_from_center(
     ensure_agent_skill_path(&target_path, &skills_root)?;
 
     let source = PathBuf::from(&managed.central_path);
-    sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
-        .map_err(AppError::io)?;
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let mode = sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref());
+    sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
     Ok(())
 }
 
@@ -507,7 +661,7 @@ mod tests {
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
-    use crate::core::{central_repo, installer};
+    use crate::core::{central_repo, installer, tool_adapters, tool_service};
     use std::collections::HashMap;
 
     #[test]
@@ -879,6 +1033,279 @@ mod tests {
 
         // Idempotent: a second run sees the target and repairs nothing.
         assert_eq!(backfill_stranded_agent_targets(&store), 0);
+        assert_eq!(store.get_all_targets().unwrap().len(), 1);
+
+        // After a full repair the gate is cleared (empty), not left pointing at
+        // a stale set, so a future stranded skill is never masked.
+        assert_eq!(
+            store
+                .get_setting(super::BACKFILL_SIG_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn stranded_signature_reflects_set_not_row_order() {
+        let skill = |id: &str, source_ref: Option<&str>| SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: source_ref.map(str::to_string),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: String::new(),
+            content_hash: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+
+        // No source_ref, or already targeted → not stranded → no signature.
+        assert_eq!(
+            super::stranded_candidate_signature(&[skill("a", None)], &[], &[]),
+            None
+        );
+
+        let a = skill("a", Some("/x"));
+        let b = skill("b", Some("/y"));
+        let sig_ab = super::stranded_candidate_signature(&[a.clone(), b.clone()], &[], &[]);
+        let sig_ba = super::stranded_candidate_signature(&[b, a], &[], &[]);
+        assert!(sig_ab.is_some());
+        // Order-independent: same set → same signature.
+        assert_eq!(sig_ab, sig_ba);
+        // Different set → different signature.
+        assert_ne!(
+            sig_ab,
+            super::stranded_candidate_signature(&[skill("a", Some("/x"))], &[], &[])
+        );
+        // Same skill id but a changed source path must re-arm the backfill scan;
+        // otherwise a repaired/imported path change could remain hidden behind
+        // an old startup gate.
+        assert_ne!(
+            super::stranded_candidate_signature(&[skill("a", Some("/x"))], &[], &[]),
+            super::stranded_candidate_signature(&[skill("a", Some("/new-x"))], &[], &[])
+        );
+        // A tool becoming available (installed/enabled) must re-arm the scan:
+        // the unchanged candidate might be repairable on the new tool.
+        assert_ne!(
+            super::stranded_candidate_signature(&[skill("a", Some("/x"))], &[], &[]),
+            super::stranded_candidate_signature(
+                &[skill("a", Some("/x"))],
+                &[],
+                &["claude".to_string()]
+            )
+        );
+        // ...but the adapter ORDER must not matter.
+        assert_eq!(
+            super::stranded_candidate_signature(
+                &[skill("a", Some("/x"))],
+                &[],
+                &["claude".to_string(), "codex".to_string()]
+            ),
+            super::stranded_candidate_signature(
+                &[skill("a", Some("/x"))],
+                &[],
+                &["codex".to_string(), "claude".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn backfill_skips_scan_when_candidate_signature_unchanged() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: local-tool\ndescription: Agent copy\n---\nlocal\n",
+        )
+        .unwrap();
+
+        let existing = installer::install_from_local(&skill_dir, Some("local-tool")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "stranded".to_string(),
+                name: "local-tool".to_string(),
+                description: existing.description.clone(),
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(existing.content_hash.clone()),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Pre-seed the gate with the CURRENT stranded set's signature, as if a
+        // previous launch already attempted (and could not finish repairing) it.
+        // Computed exactly the way backfill computes it (same adapter set).
+        let disabled = tool_service::get_disabled_tools(&store);
+        let available: Vec<String> = tool_adapters::all_tool_adapters(&store)
+            .iter()
+            .filter(|a| a.is_installed() && !disabled.contains(&a.key))
+            .map(|a| a.key.clone())
+            .collect();
+        let sig = super::stranded_candidate_signature(
+            &store.get_all_skills().unwrap(),
+            &store.get_all_targets().unwrap(),
+            &available,
+        )
+        .unwrap();
+        store.set_setting(super::BACKFILL_SIG_KEY, &sig).unwrap();
+
+        // The skill IS repairable, but the matching gate short-circuits the
+        // expensive filesystem scan (#248): nothing is scanned or repaired.
+        assert_eq!(backfill_stranded_agent_targets(&store), 0);
+        assert!(store.get_all_targets().unwrap().is_empty());
+
+        // Divergence changes the candidate's content fingerprint → the gate
+        // re-arms → the scan runs but correctly refuses to repair a diverged
+        // local (that could clobber newer local edits); the attempt re-seeds
+        // the gate with the diverged state.
+        let skill_md = skill_dir.join("SKILL.md");
+        let original = std::fs::read(&skill_md).unwrap();
+        std::fs::write(
+            &skill_md,
+            "---\nname: local-tool\ndescription: Agent copy\n---\nedited locally\n",
+        )
+        .unwrap();
+        assert_eq!(backfill_stranded_agent_targets(&store), 0);
+        assert!(store.get_all_targets().unwrap().is_empty());
+
+        // Restoring the local copy to match center must re-arm once more and
+        // now complete the repair — "candidate set unchanged" is not
+        // "repairability unchanged".
+        std::fs::write(&skill_md, original).unwrap();
+        assert_eq!(backfill_stranded_agent_targets(&store), 1);
+        assert_eq!(store.get_all_targets().unwrap().len(), 1);
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn backfill_rearms_when_adapter_becomes_available() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let skill_dir = skills_root.join("local-tool");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: local-tool\ndescription: Agent copy\n---\nlocal\n",
+        )
+        .unwrap();
+
+        let existing = installer::install_from_local(&skill_dir, Some("local-tool")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "stranded".to_string(),
+                name: "local-tool".to_string(),
+                description: existing.description.clone(),
+                source_type: "local".to_string(),
+                source_ref: Some(skill_dir.to_string_lossy().to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: existing.central_path.to_string_lossy().to_string(),
+                content_hash: Some(existing.content_hash.clone()),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+
+        // Seed the gate exactly as the previous launch's backfill would have,
+        // BEFORE the matching agent is configured (its key absent from the
+        // available set).
+        let disabled = tool_service::get_disabled_tools(&store);
+        let available: Vec<String> = tool_adapters::all_tool_adapters(&store)
+            .iter()
+            .filter(|a| a.is_installed() && !disabled.contains(&a.key))
+            .map(|a| a.key.clone())
+            .collect();
+        let sig = super::stranded_candidate_signature(
+            &store.get_all_skills().unwrap(),
+            &store.get_all_targets().unwrap(),
+            &available,
+        )
+        .unwrap();
+        store.set_setting(super::BACKFILL_SIG_KEY, &sig).unwrap();
+
+        // Now the agent appears (installed + enabled): the availability change
+        // alone must invalidate the gate and let the repair run.
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        assert_eq!(backfill_stranded_agent_targets(&store), 1);
         assert_eq!(store.get_all_targets().unwrap().len(), 1);
 
         central_repo::set_test_base_dir_override(None);

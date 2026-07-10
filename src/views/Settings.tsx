@@ -5,6 +5,7 @@ import {
   RefreshCw,
   Globe,
   Link as LinkIcon,
+  Unlink,
   Copy,
   Settings2,
   Github,
@@ -51,6 +52,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
 import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
+import { useNavigate } from "react-router-dom";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
@@ -161,6 +163,7 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 
 export function Settings() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const { tools, presets, refreshTools, openHelp } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
@@ -174,6 +177,7 @@ export function Settings() {
   const [reportingIssue, setReportingIssue] = useState(false);
   const [exportingLogs, setExportingLogs] = useState(false);
   const [lastPanic, setLastPanic] = useState<api.PanicInfo | null>(null);
+  const [repoWarnings, setRepoWarnings] = useState<string[]>([]);
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [centralRepoPathOverride, setCentralRepoPathOverride] = useState<string | null>(null);
   const [editingCentralRepoPath, setEditingCentralRepoPath] = useState(false);
@@ -184,6 +188,10 @@ export function Settings() {
   const [installing, setInstalling] = useState(false);
   const [gitRemoteInput, setGitRemoteInput] = useState("");
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
+  const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
+  const [gitEngineGit2, setGitEngineGit2] = useState(false);
+  // Object merge is the default since 3d-β; "system" is the opt-out.
+  const [gitMergeEngineObject, setGitMergeEngineObject] = useState(true);
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
@@ -322,6 +330,7 @@ export function Settings() {
 
   useEffect(() => {
     api.checkLastPanic().then(setLastPanic).catch(() => {});
+    api.getCentralRepoWarnings().then(setRepoWarnings).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -350,21 +359,17 @@ export function Settings() {
     }).catch(() => {});
     api.getCentralRepoPathOverride().then(setCentralRepoPathOverride).catch(() => {});
 
-    (async () => {
-      const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
-      if (savedRemote) {
-        setGitRemoteInput(savedRemote);
-        return;
-      }
-
-      // Fallback: if repo already has remote configured, auto-fill and persist it.
-      const status = await api.gitBackupStatus().catch(() => null);
-      const detectedRemote = status?.remote_url?.trim() || "";
-      if (detectedRemote) {
-        setGitRemoteInput(detectedRemote);
-        api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
-      }
-    })();
+    // The saved setting is the single source of truth. Do not backfill from
+    // `.git/config` — that made a cleared URL reappear on reopen (#260).
+    api.getSettings("git_backup_remote_url").then((v) => {
+      setGitRemoteInput(v?.trim() || "");
+    }).catch(() => {});
+    api.getSettings("git_backup_engine").then((v) => {
+      setGitEngineGit2(v?.trim() === "git2");
+    }).catch(() => {});
+    api.getSettings("merge_engine").then((v) => {
+      setGitMergeEngineObject((v ?? "").trim() !== "system");
+    }).catch(() => {});
   }, []);
 
   const handleRefresh = async () => {
@@ -692,12 +697,30 @@ export function Settings() {
   const handleSaveGitRemote = async () => {
     setGitRemoteSaving(true);
     try {
-      await api.setSettings("git_backup_remote_url", gitRemoteInput.trim());
+      // Credentials embedded in the URL go to the OS keychain; only the
+      // sanitized URL is persisted (backup redesign §3.7).
+      const trimmed = gitRemoteInput.trim();
+      const effective = trimmed ? await api.gitBackupSanitizeRemoteUrl(trimmed) : "";
+      await api.setSettings("git_backup_remote_url", effective);
+      setGitRemoteInput(effective);
       toast.success(t("settings.gitConfigSaved"));
     } catch {
       toast.error(t("common.error"));
     } finally {
       setGitRemoteSaving(false);
+    }
+  };
+
+  const handleDisconnectGitRemote = async () => {
+    setGitRemoteDisconnecting(true);
+    try {
+      await api.gitBackupRemoveRemote();
+      setGitRemoteInput("");
+      toast.success(t("settings.gitDisconnected"));
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setGitRemoteDisconnecting(false);
     }
   };
 
@@ -736,6 +759,16 @@ export function Settings() {
     () => installedTools.filter((tool) => tool.enabled),
     [installedTools]
   );
+  const autoUpdateIntervalOptions = [
+    { value: "off", label: t("settings.autoUpdate.intervalOff") },
+    { value: "1h", label: t("settings.autoUpdate.interval1h") },
+    { value: "6h", label: t("settings.autoUpdate.interval6h") },
+    { value: "24h", label: t("settings.autoUpdate.interval24h") },
+  ] as const;
+  const autoUpdateApplyOptions = [
+    { value: "off", label: t("settings.autoUpdate.applyOff") },
+    { value: "on", label: t("settings.autoUpdate.applyOn") },
+  ] as const;
   const customTools = useMemo(() => tools.filter((tool) => tool.is_custom), [tools]);
   const builtInTools = useMemo(() => tools.filter((tool) => !tool.is_custom), [tools]);
   const mainstreamTools = useMemo(
@@ -1563,16 +1596,24 @@ export function Settings() {
                     : ""}
                 </p>
               </div>
-              <select
-                value={autoUpdateInterval}
-                onChange={(e) => handleAutoUpdateIntervalChange(e.target.value)}
-                className={`${fieldClass} shrink-0`}
-              >
-                <option value="off">{t("settings.autoUpdate.intervalOff")}</option>
-                <option value="1h">{t("settings.autoUpdate.interval1h")}</option>
-                <option value="6h">{t("settings.autoUpdate.interval6h")}</option>
-                <option value="24h">{t("settings.autoUpdate.interval24h")}</option>
-              </select>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                {autoUpdateIntervalOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={autoUpdateInterval === option.value}
+                    onClick={() => handleAutoUpdateIntervalChange(option.value)}
+                    className={cn(
+                      segmentedButtonClass,
+                      autoUpdateInterval === option.value
+                        ? "bg-surface-active text-secondary"
+                        : "text-muted hover:text-tertiary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex items-center justify-between gap-4 px-4 py-2.5">
               <div className="min-w-0">
@@ -1583,14 +1624,24 @@ export function Settings() {
                   {t("settings.autoUpdate.applyDesc")}
                 </p>
               </div>
-              <select
-                value={autoUpdateApply}
-                onChange={(e) => handleAutoUpdateApplyChange(e.target.value)}
-                className={`${fieldClass} shrink-0`}
-              >
-                <option value="off">{t("settings.autoUpdate.applyOff")}</option>
-                <option value="on">{t("settings.autoUpdate.applyOn")}</option>
-              </select>
+              <div className="flex flex-wrap rounded-[4px] border border-border-subtle bg-background p-px">
+                {autoUpdateApplyOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={autoUpdateApply === option.value}
+                    onClick={() => handleAutoUpdateApplyChange(option.value)}
+                    className={cn(
+                      segmentedButtonClass,
+                      autoUpdateApply === option.value
+                        ? "bg-surface-active text-secondary"
+                        : "text-muted hover:text-tertiary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -1603,7 +1654,17 @@ export function Settings() {
           <div className="app-panel overflow-hidden divide-y divide-border-subtle">
             <div className="px-4 py-3">
               <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.gitRemoteUrl")}</h3>
-              <p className="text-[13px] text-muted mb-2">{t("settings.gitSyncConfigDesc")}</p>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[13px] text-muted">{t("settings.gitSyncConfigDesc")}</p>
+                <button
+                  type="button"
+                  onClick={() => navigate("/backup")}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {t("settings.openBackupPage")}
+                </button>
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
@@ -1624,13 +1685,80 @@ export function Settings() {
                   )}
                   {t("common.save")}
                 </button>
+                <button
+                  onClick={handleDisconnectGitRemote}
+                  disabled={gitRemoteDisconnecting}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {gitRemoteDisconnecting ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Unlink className="w-3 h-3" />
+                  )}
+                  {t("settings.gitDisconnect")}
+                </button>
               </div>
+              <p className="text-[12px] text-muted mt-2">{t("settings.gitDisconnectHint")}</p>
+              <label className="mt-3 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={gitEngineGit2}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setGitEngineGit2(next);
+                    try {
+                      await api.setSettings("git_backup_engine", next ? "git2" : "system");
+                      toast.success(t("common.success"));
+                    } catch {
+                      setGitEngineGit2(!next);
+                      toast.error(t("common.error"));
+                    }
+                  }}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-secondary">{t("settings.gitEngineGit2")}</span>
+                  <span className="block text-[12px] text-muted">{t("settings.gitEngineGit2Desc")}</span>
+                </span>
+              </label>
+              <label className="mt-3 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={gitMergeEngineObject}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setGitMergeEngineObject(next);
+                    try {
+                      await api.setSettings("merge_engine", next ? "object" : "system");
+                      toast.success(t("common.success"));
+                    } catch {
+                      setGitMergeEngineObject(!next);
+                      toast.error(t("common.error"));
+                    }
+                  }}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-secondary">{t("settings.gitMergeEngineObject")}</span>
+                  <span className="block text-[12px] text-muted">{t("settings.gitMergeEngineObjectDesc")}</span>
+                </span>
+              </label>
             </div>
           </div>
         </section>
 
         {/* About */}
         <section className="space-y-2">
+          {repoWarnings.length > 0 && (
+            <div className="app-panel flex flex-wrap items-start gap-2 p-3 border border-amber-500/40 bg-amber-500/10">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
+              <div className="min-w-0 flex-1 space-y-1 text-[13px] text-amber-800 dark:text-amber-300">
+                {repoWarnings.map((code) => (
+                  <p key={code}>{t(`settings.repoWarning_${code}`)}</p>
+                ))}
+              </div>
+            </div>
+          )}
           {lastPanic && (
             <div className="app-panel flex flex-wrap items-center justify-between gap-2 p-3 border border-red-500/40 bg-red-500/10">
               <div className="flex min-w-0 items-center gap-2 text-[13px] text-red-700 dark:text-red-300">

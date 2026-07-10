@@ -11,6 +11,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI: `presets create` subcommand** — The `skills-manager-cli` Rust CLI can now create presets: `presets create <NAME> [--description <D>] [--icon <KEY>]`. Unlike the GUI's `create_preset`, the CLI variant is side-effect-free — it inserts the preset and persists sync metadata without activating it or disturbing the currently active preset's synced targets. Activate the new preset explicitly with `presets apply <reference>`. Backed by a new `scenario_service::create_preset_no_activate` core function with unit tests covering the no-activate guarantee and metadata flush.
 - **CLI: `presets delete` subcommand** — The CLI can now delete presets by id, name, or `current`: `presets delete <reference>` (aliases: `remove`, `rm`). Deleting the active preset tears down its synced targets first, then activates a replacement using the same strategy as `presets deactivate` (prefers the configured default, else the first remaining). Backed by a new `scenario_service::delete_preset` core function; DB-level `ON DELETE CASCADE` clears memberships and `ON DELETE SET NULL` nulls the active pointer, so no orphaned sync metadata survives. Unit tests cover inactive delete, active delete, and the not-found case.
 
+## [1.28.2] - 2026-07-10
+
+### Release Overview
+- Performance and correctness patch: faster startup and snappier actions, installing a specific skill can no longer pull in an entire repository by mistake, and the auto-update settings match the rest of the page.
+
+### User-facing
+- **Faster startup and snappier actions** — Launch no longer blocks on a full scan of every agent's skill directories; that reconciliation now runs in the background after the window is up. Project workspace scanning walks each skill's files once instead of twice, and the file watcher no longer fires a redundant full refresh in response to the app's own writes. Addresses the slow-startup / laggy-actions reports (#248).
+- **Installing a missing skill errors instead of installing the whole repo** — Asking to install a specific skill whose name doesn't exist in the source (an upstream rename or removal, a stale index, or a typo) previously fell back to copying the entire repository as a single "skill", duplicating every skill it contained. It now fails with a clear "skill not found" error and installs nothing (#278).
+- **Auto-update settings use segmented controls** — The "check interval" and "auto-apply" options on the Settings page were plain dropdowns; they now use the same segmented-button controls as the rest of the page (theme, sync mode, tray), so every option is visible at a glance (#241).
+
+### Developer & Governance
+- Startup-performance fix (#285) landed after three rounds of codex review: the stranded-target backfill moved off `setup()` into a post-window `spawn_blocking` gated by a candidate-set signature; project/workspace scanning collapsed two full directory walks per skill into one; and a 1.2s monotonic self-write mute window on the file watcher, refined to path-level muting plus a content-hash directory fingerprint so genuine external events are still delivered. +5 Rust tests.
+- Install fix (#280) makes `find_skill_dir` bail when a requested `skill_id` matches nothing, preserving the container/root fallback only for the `skill_id == None` enumeration flow; a read-only codex review confirmed no caller regressions, and a follow-up added — then strengthened after a second codex pass — a regression guard for the legitimate root-frontmatter-name match.
+- The README Star History chart is now self-hosted (`scripts/gen-star-history.py` plus a bundled font) instead of embedding the third-party image.
+- Backend Rust test suite at 387 passing; frontend `npm run build` clean.
+## [1.28.1] - 2026-07-05
+
+### Release Overview
+- Hardening patch from the first real-world multi-device sync: legacy leftovers from older app versions no longer permanently block merging, sync failures show their actual reason, and the Backup page says "sync" instead of "back up" when remote updates are involved.
+
+### User-facing
+- **Legacy leftovers no longer block syncing** — Libraries that were backed up by older app versions could carry invisible remains (skill folders without metadata, half-written temp files committed long ago). The very first real two-device merge hit exactly this and failed permanently with an opaque error. Merging now cleans temp junk out of the merged result automatically and tolerates pre-existing unmanaged folders — they sync along untouched; only inconsistencies a merge itself would introduce still abort.
+- **Failure cards show the real reason** — Sync errors previously displayed only the outermost summary ("object merge aborted") while the actual cause stayed hidden; the full error chain now reaches the Backup page, making failures diagnosable without log spelunking.
+- **"Sync Now" instead of "Back Up Now"** — With "local changes: 0 · remote updates: 1" the button said "Back Up Now", reading like a push that might overwrite the remote. The pending state now distinguishes its three situations: remote-only updates get their own title ("Updates from your other devices"), an explicit "nothing here is uploaded or overwritten" description, and a "Sync Now" button; mixed states say that syncing merges per skill and neither side overwrites the other.
+
+### Developer & Governance
+- Plan-stage input self-heal: residual files inside the managed metadata namespace that the app never writes (`*.tmp.*` atomic-write leftovers, non-JSON strays) are dropped from the merged tree; every commit path also deletes such leftovers from the working tree first — a push-only machine never runs the reconcile cleanup, which is how one got committed in the first place.
+- Validator rule 4 gains a grandfather set: skill dirs already unclaimed in either merge input are tolerated (viewpoint-independent: the union of both tips); the merged tree stays strict about orphans a merge would introduce. Input-tip validation (old-client checks) additionally tolerates committed metadata junk via the new `validate_input_tip`.
+- `classify_git_chain` preserves the full anyhow error chain (`{:#}`) for all backup command errors.
+- A codex review of the incident fixes surfaced two gaps, both fixed: the old-client tip validation still hard-failed on committed temp files, and the legacy-dirt integration test silently lost its "junk already in history" topology because the app's own commit path now cleans temp files — it commits via raw git now and was mutation-verified (disabling the plan-stage drop makes it fail). Backend tests: 377.
+## [1.28.0] - 2026-07-04
+
+### Release Overview
+- Backup becomes true multi-device sync: changes back up automatically and flow between your devices hands-free, merges understand skills instead of text lines, and a conflict never blocks a sync or overwrites your work — it waits for your decision with a safety snapshot behind every choice.
+
+### User-facing
+- **Automatic backup** — A couple of minutes after you stop editing, changes are committed and uploaded in the background; quitting the app saves locally first and the next launch uploads it. A new Backup-page toggle controls it (on by default), and a failed run stays visible as a status card with a plain-language reason instead of a vanishing toast.
+- **Hands-free two-way sync** — When another device pushed changes, the background round now merges them in and pushes back automatically — connected devices converge without anyone clicking Sync. Manual "Back Up Now" still works anytime.
+- **Skill-aware merging** — Syncs now merge per skill instead of per text line: renaming a skill on one machine combines cleanly with editing its content on another, deletions propagate only when the other side didn't touch the skill, and metadata always moves together with its folder.
+- **Conflicts wait for you instead of blocking** — If the same skill was edited on two devices at once, everything else syncs normally; that skill keeps your local version and appears under "Needs attention" on the Backup page and as an amber badge on its Library card. Choose keep mine / use remote / keep both (the remote copy lands as a normal skill named after its device) — a safety snapshot is taken before any choice, so every decision is undoable. While a conflict is open, remote changes to that skill pause automatic sync; everything else keeps flowing.
+- **Backups signed by device** — Each device gets a name (editable on the Backup page); backup history and merge summaries show which device made each change, so "yesterday 22:14 · Work Laptop · 3 skills updated" reads like a timeline.
+- **Sync races resolved silently** — Backing up while another device pushes at the same moment no longer surfaces as a scary "needs recovery" error: the whole sync runs as one transaction that automatically refetches, re-merges, and retries the upload.
+- **Oversized skills stay local** — Skills over 100 MB are excluded from backup by default (kept fully usable on this machine, labeled on the Backup page). Skills already backed up are never silently removed; shrink an excluded skill and it re-enters the backup automatically.
+- **Fuller disconnect options** — Alongside "Disconnect this machine", the Backup page now offers "Revoke authorization" (opens the right GitHub page for how you connected, then disconnects locally) and a danger-zone "Delete remote backup" routed through GitHub's own type-the-name confirmation.
+- **Reconnect in one click** — When the backup fails because the GitHub authorization was revoked or expired, the status card now offers "Reconnect GitHub" to run the sign-in again in place.
+- **Protection against old app versions** — If an older Skills Manager wrote to the same backup, syncing detects it: harmless writes proceed with an upgrade reminder, unsafe line-level merges are blocked with the device named, and repositories never touched by a new version keep the old sync behavior unchanged.
+
+### Developer & Governance
+- New `core/merge` engine (merge-engine design v4, four codex design reviews): component-level three-way decisions (content / path / attrs), canonical metadata rebuild for byte-identical convergence (tree-OID-equal merges on both devices), viewpoint-free path-collision reassignment with pending placeholders, and a strict merged-tree validator that aborts with zero changes on any invariant violation.
+- Pending conflicts derive from commit trailers (`Skills-Manager-Conflicts` / `Resolved`) so they replicate via push/pull and survive re-clones; hidden refs pin the counterpart version against GC with a staging→promote protocol; a crash-safe apply sequence (pre-merge/applying anchors) plus a startup recovery that settles the working tree and rescues user edits into snapshot tags.
+- Protocol markers (`.skills-manager/protocol.json` + commit trailer) ride every app commit, powering two-tier old-client detection with a legacy fallback; the app's own line merges (escape hatch and legacy path) are stamped so other devices don't misattribute them.
+- The object merge is the default engine with `merge_engine=system` as the opt-out; the GUI sync and CLI `git pull` share one gated path, and a new one-lock `git_backup_sync` command replaces the frontend commit/pull/push orchestration (push rejections retry fetch+merge up to 3×).
+- Two codex code reviews on the implementation (6 + 5 findings): fixed a checkout-rollback crash window, stale conflict pointers after offline re-declarations, UseRemote nested-path data loss, oversized-exclusion gaps in init/restore/shrink paths, and unknown-auth-method revocation; declined findings are documented with rationale (and one pinned by an empirical test).
+- Fixed a latent reindex bug: path reassignments between skills (rename chains after merges) could trip the `central_path` UNIQUE constraint mid-loop; rows now park on placeholders first.
+- CLI gains `git prune-sync-refs` to clean `refs/skills-manager/*` copies that mirror-style pushes uploaded to the remote; SQLite migration v7 adds the rebuildable `pending_conflicts` projection.
+- Backend test suite grows from 304 to 375 (decision matrix, tree-OID convergence, two-repo integration incl. the R3 counterexample, crash-recovery branches, protocol violations, damping, oversized exclusion); README backup section and the in-app help rewritten for the redesigned product.
+## [1.27.0] - 2026-07-03
+
+### Release Overview
+- Backup redesign Phase 2: connect your backup by signing in with GitHub — no repository setup, no tokens to paste, no git knowledge required.
+
+### User-facing
+- **Sign in with GitHub** — The Backup page's new primary connect path: click once, enter an 8-character code in the browser, and the app does the rest — creates a private `skills-manager-backup` repository (name adjustable), stores the sign-in credential in the system keychain, and then either restores your existing backup or pushes the first one. The credential never appears in any file, and the app never sees your GitHub password.
+- **Personal access token as the advanced option** — Prefer a token, or need it as a network fallback? An "advanced" toggle in the same panel accepts a PAT with the same automatic repository setup, plus a pre-filled token-creation link. Network errors during sign-in point here explicitly.
+- **Public-repository warning** — Repositories the app creates are always private; if you connect a pre-existing PUBLIC repository, a warning now explains what that exposes and how to change the visibility on GitHub.
+- **Built-in Git engine (experimental)** — A new Settings toggle routes the backup's HTTPS network operations (fetch, push, clone, remote checks) through the app's built-in Git engine: no system git required, credentials injected in memory from the keychain. Default off; SSH and custom remotes always use system git; switch back anytime.
+
+### Developer & Governance
+- New `core/github_api.rs`: minimal GitHub REST client (token validation, find-or-create private repo, device flow start/poll) with stable error markers mapped to plain-language copy; honors the app proxy setting. Both device-flow endpoints verified against the live OAuth client id.
+- The OAuth App client id ships in the binary by design (public identifier, device flow enabled); there is deliberately no client secret. On authorization the OAuth token completes the entire connect in the backend — it never reaches the webview.
+- New `core/git2_engine.rs`: network-operations-only scope, keychain credentials via the git2 callback (2-attempt cap), errors normalized to system git's vocabulary so the existing UI error mapping and recovery routing work unchanged; push parity (tracking ref + upstream config) covered by local bare-repo roundtrip and non-fast-forward rejection tests.
+- Engine preference syncs from settings at every network command entry; a failed built-in-engine clone cleans its partial target so retries don't wedge.
+- Windows test fix: platform-correct `file:///C:/...` URLs in the git2 engine tests.
+
+## [1.26.0] - 2026-07-03
+
+### Release Overview
+- First installment of the backup redesign (cluster #24 / #264): a dedicated Backup page, restores that are always undoable, and access tokens moved out of files into the OS keychain.
+
+### User-facing
+- **New "Backup" page** — A sidebar entry that gathers everything backup-related in one place: connection status, Back Up Now, snapshot history with one-click restore, a clear list of what is and isn't backed up, and Disconnect. The Library toolbar's backup controls collapse into a single status dot that links here; the Git URL field in Settings remains as an advanced entry.
+- **Restore is always undoable** — Before restoring any snapshot, the current state (including unsaved edits) is first saved as a visible snapshot of its own and shown in the history; a failed restore rolls back to it automatically. The old "commit or sync before restoring" blocker is gone.
+- **Access tokens leave your files** — Tokens embedded in backup URLs (`https://user:token@host/...`) are automatically migrated into the OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service): `.git/config` and the app database are rewritten to the credential-free URL and the connection is re-verified, with a full rollback if any step fails. Newly saved or cloned URLs are sanitized the same way. Git receives credentials in memory only — tokens no longer appear in any file or log.
+- **Disconnect also removes this machine's credential** — Disconnecting deletes the stored keychain credential along with the remote configuration. Remote data and other devices are unaffected.
+- **Clearer status language** — The pending state now says how many skills have unbacked changes, and a failed backup stays visible as a red status card with a plain-language reason and a Retry button instead of a vanishing toast.
+- **First-launch restore** — On a fresh install with an empty library, the app asks up front: start fresh, or restore from a backup? Pasting the backup repository URL brings everything over (#193/#140 lesson: the restore entry must not be buried in a toolbar).
+- **Size warnings** — The Backup page warns when a single skill folder exceeds 100 MB or the whole backup exceeds 1 GB (warn-only for now; oversized skills are still included).
+
+### Developer & Governance
+- New `git_credentials` core module: keyring v3 (`apple-native` / `windows-native` / `sync-secret-service` with vendored libdbus), URL userinfo parsing, and a static askpass script that only echoes environment variables — no secrets on disk.
+- New commands `git_backup_sanitize_remote_url`, `git_backup_migrate_credentials`, `git_backup_size_report`; `git_backup_set_remote` returns the sanitized URL and `git_backup_restore_version` returns the safety-point tag. App startup runs the credential migration idempotently in the background.
+- Backup-redesign Phase 1 acceptance is now automated: #244 (status stays in-sync across a simulated restart), #260 (disconnect clears origin and setting, idempotent), migration rollback leaves no half-migrated state, restore safety point captures dirty edits, and URL credential parsing — 304 tests total.
+- `test.yml` gains a Linux cargo-check job so Linux-only compile breaks (e.g. keyring's vendored libdbus) surface on push instead of at release time; previously Linux was only compiled by the release workflow.
+- Git error mapping extracted from the Backup page into `lib/gitErrors.ts`, shared with the first-run dialog; backup proposal Phase 1 status updated in `docs/backup-redesign-proposal.md` §7.
+
+## [1.25.2] - 2026-07-03
+
+### Release Overview
+- A data-trust patch for the two top-ranked P0 issues: project workspaces finally honor symlink mode, and a broken central-library config no longer silently presents as an empty library.
+
+### User-facing
+- **Project workspaces now honor symlink mode** — Installing a skill into a project workspace, or updating it from the center, always copied files no matter what the sync-mode setting said; these paths never requested a symlink, which is why the v1.23.1 Windows junction fix never helped and macOS was affected too. They now follow the sync-mode setting exactly like the global workspace, reusing the same platform fallbacks. Updating also refuses to overwrite a project copy that has unsynced local edits, mirroring the global-workspace protection. Note: project symlinks point at this machine's central library and won't travel with the repo — the sync-mode setting description now says so (#225, #202).
+- **A broken central-library config no longer looks like losing every skill** — When `repo-config.json` was unreadable, corrupt, or contained an invalid path, the app silently fell back to the default location and created a fresh empty library there, presenting as "the library was rebuilt, all skills gone" while the data still sat at the configured path. Settings now shows a warning banner explaining the fallback and that the data is still at the previously configured location (#228 follow-up report).
+- **Safer install/update guardrails** — The copy-overlap guard now rejects a source that cannot be resolved (missing or dangling symlink) and mutual source/destination containment before any destructive step runs, hardening local-skill updates against data loss (#199 hardening).
+
+### Developer & Governance
+- Central-repo config loading now distinguishes missing / valid / invalid states; new `get_central_repo_warnings` command feeds the Settings banner.
+- The legacy `.agent-skills` migration ran after directory creation had already made its condition false (dead code since the ordering changed); it now runs first. Also removed a `home_dir().unwrap()` on that path.
+- Global local-skill updates (`update_agent_local_skill_from_center`) follow the sync-mode setting as well.
+- 7 new unit tests: guard edge cases (missing/dangling source, mutual containment), hashing through a symlinked root, and config three-state loading. Root causes and fix plans were adversarially reviewed (codex, read-only sandbox) before implementation.
+
+## [1.25.1] - 2026-07-03
+
+### Release Overview
+- A backup-trust patch: sync status no longer misreports "central is newer" after a restart, and the Git backup remote can now actually be disconnected.
+
+### User-facing
+- **Sync status stays consistent across restarts** — Uploading a skill to the central library and restarting the app no longer flips the project-workspace status from "in sync" to "central is newer". Reindexing now preserves a skill's timestamp when its content is unchanged (#244).
+- **Disconnect Git backup** — Settings → Git Sync Configuration now has a Disconnect button that removes the remote configuration from this machine; local skills and the remote repository are kept. Previously a cleared remote URL always reappeared on reopen because the UI backfilled it from `.git/config` — the saved setting is now the single source of truth (#260, also resolves the "cannot reset configuration" part of #108).
+- **Copy consistency** — Backup-related copy now consistently refers to the "Library" page (previously "My Skills").
+
+### Developer & Governance
+- New `git_backup_remove_remote` Tauri command: idempotently removes the git origin and clears the saved remote URL setting, so a retry after a partial disconnect converges.
+- Two new unit tests cover the disconnect path (origin removal is idempotent; succeeds on a non-repo directory).
+
 ## [1.25.0] - 2026-06-19
 
 ### Release Overview

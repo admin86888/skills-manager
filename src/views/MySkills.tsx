@@ -11,7 +11,6 @@ import {
   RefreshCw,
   RotateCcw,
   GitBranch,
-  History,
   ArrowUpCircle,
   Wrench,
   Loader2,
@@ -25,6 +24,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -36,8 +36,6 @@ import { DeleteSkillButton } from "../components/DeleteSkillButton";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
-import { GitSetupDialog } from "../components/GitSetupDialog";
-import { GitRecoveryDialog } from "../components/GitRecoveryDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
@@ -45,11 +43,9 @@ import type {
   ManagedSkill,
   ToolInfo,
   GitBackupStatus,
-  GitBackupVersion,
-  GitUpstreamHealth,
   SkillToolToggle,
 } from "../lib/tauri";
-import { getErrorMessage, getErrorKind } from "../lib/error";
+import { getErrorMessage } from "../lib/error";
 import {
   DndContext,
   closestCenter,
@@ -118,18 +114,9 @@ function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
-function displaySnapshotLabel(tag: string) {
-  const raw = tag.startsWith("sm-v-") ? tag.slice("sm-v-".length) : tag;
-  const parts = raw.split("-");
-  if (parts.length < 3) return raw;
-  // Supported forms:
-  // 1) YYYYMMDD-HHMMSS-<short_sha>
-  // 2) YYYYMMDD-HHMMSS-<millis>-<short_sha>
-  return `${parts[0]}-${parts[1]}`;
-}
-
 export function MySkills() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const {
     viewedPreset,
     tools,
@@ -165,21 +152,7 @@ export function MySkills() {
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
-  const [gitLoading, setGitLoading] = useState<string | null>(null); // "start" | "sync"
   const [gitRemoteConfig, setGitRemoteConfig] = useState("");
-  const [gitVersionsOpen, setGitVersionsOpen] = useState(false);
-  const [gitVersionsLoading, setGitVersionsLoading] = useState(false);
-  const [gitVersions, setGitVersions] = useState<GitBackupVersion[]>([]);
-  const [restoreVersionTag, setRestoreVersionTag] = useState<string | null>(null);
-  const [restoringVersionTag, setRestoringVersionTag] = useState<string | null>(null);
-  const [setupOpen, setSetupOpen] = useState(false);
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  // What the recovery dialog should explain. A merge conflict is not an
-  // upstream-health value, so it gets its own reason rather than being forced
-  // into `gitStatus.upstream_health` (which stays "healthy" during a conflict).
-  const [recoveryReason, setRecoveryReason] = useState<GitUpstreamHealth | "conflict">(
-    "unrelated_histories"
-  );
   const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
@@ -196,6 +169,15 @@ export function MySkills() {
     }
     api.getPresetSkillOrder(viewedPreset.id).then(setPresetSkillOrder).catch(() => {});
   }, [viewedPreset, skills]);
+
+  // Skills with an unresolved sync conflict get a "needs attention" badge
+  // that jumps to the Backup page (merge-engine design §4 UI).
+  const [conflictIds, setConflictIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    api.gitBackupPendingConflicts()
+      .then((rows) => setConflictIds(new Set(rows.map((row) => row.skill_id))))
+      .catch(() => setConflictIds(new Set()));
+  }, [skills]);
 
   const refreshAllTags = async () => {
     try {
@@ -346,83 +328,6 @@ export function MySkills() {
 
   const canDrag = !!viewedPreset;
 
-  const mapGitError = (error: unknown) => {
-    const kind = getErrorKind(error);
-    const message = getErrorMessage(error, "");
-
-    if (kind === "network") {
-      return t("settings.gitErrorNetwork");
-    }
-
-    if (
-      message.includes("Authentication failed")
-      || message.includes("Permission denied")
-      || message.includes("could not read Username")
-    ) {
-      return t("settings.gitErrorAuth");
-    }
-    if (
-      message.includes("Could not resolve host")
-      || message.includes("Failed to connect")
-      || message.includes("Connection timed out")
-      || /connection\s+refused/i.test(message)
-    ) {
-      return t("settings.gitErrorNetwork");
-    }
-    // Order matters: check specific reject reasons before the generic conflict keyword.
-    if (message.includes("unrelated histories") || message.includes("refusing to merge")) {
-      return t("settings.gitErrorUnrelatedHistories");
-    }
-    if (
-      message.includes("[rejected]")
-      || message.includes("non-fast-forward")
-      || message.includes("fetch first")
-      || message.includes("failed to push some refs")
-    ) {
-      return t("settings.gitErrorRejected");
-    }
-    if (message.includes("no upstream") || message.includes("has no upstream branch")) {
-      return t("settings.gitErrorNoUpstream");
-    }
-    if (message.includes("CONFLICT") || message.includes("conflict")) {
-      return t("settings.gitErrorConflict");
-    }
-    if (message.includes("not a git repository")) {
-      return t("settings.gitErrorNotRepo");
-    }
-    const fallback = t("settings.gitErrorGeneric");
-    const detail = message.trim();
-    if (detail && detail !== "Error") {
-      return `${fallback} (${detail})`;
-    }
-    return fallback;
-  };
-
-  // A merge conflict (or a leftover MERGE_HEAD from an older build, which the
-  // backend tags as SYNC_CONFLICT): the merge has been aborted, so the only
-  // safe in-app fix is to re-clone from remote. Deliberately does NOT match the
-  // generic "already in progress" message, which also covers non-conflict
-  // interruptions like a stale index.lock.
-  const isSyncConflictError = (error: unknown) => {
-    const message = getErrorMessage(error, "");
-    return message.includes("SYNC_CONFLICT") || message.includes("CONFLICT");
-  };
-
-  // Detect errors that mean "the local repo's relationship to remote needs structural repair".
-  const isRecoverableSetupError = (error: unknown) => {
-    const message = getErrorMessage(error, "");
-    return (
-      message.includes("unrelated histories")
-      || message.includes("refusing to merge")
-      || message.includes("[rejected]")
-      || message.includes("non-fast-forward")
-      || message.includes("fetch first")
-      || message.includes("failed to push some refs")
-      || message.includes("no upstream")
-      || isSyncConflictError(error)
-    );
-  };
-
   const refreshGitStatus = useCallback(async () => {
     try {
       await api.gitBackupFetch().catch(() => {});
@@ -445,38 +350,14 @@ export function MySkills() {
     }
   }, []);
 
-  const refreshGitVersions = useCallback(async () => {
-    if (!gitStatus?.is_repo) {
-      setGitVersions([]);
-      return;
-    }
-    setGitVersionsLoading(true);
-    try {
-      const versions = await api.gitBackupListVersions(30);
-      setGitVersions(versions);
-    } catch {
-      setGitVersions([]);
-    } finally {
-      setGitVersionsLoading(false);
-    }
-  }, [gitStatus?.is_repo]);
-
   useEffect(() => {
     (async () => {
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       const status = await api.gitBackupStatus().catch(() => null);
       setGitStatus(status);
-
-      if (savedRemote) {
-        setGitRemoteConfig(savedRemote);
-        return;
-      }
-
-      const detectedRemote = status?.remote_url?.trim() || "";
-      if (detectedRemote) {
-        setGitRemoteConfig(detectedRemote);
-        api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
-      }
+      // The saved setting is the single source of truth. Do not backfill from
+      // `.git/config` — that made a cleared URL reappear after disconnect (#260).
+      setGitRemoteConfig(savedRemote);
     })();
   }, []);
 
@@ -504,12 +385,6 @@ export function MySkills() {
     }, 400);
     return () => window.clearTimeout(timer);
   }, [skills, refreshGitStatusLocal]);
-
-  useEffect(() => {
-    if (gitVersionsOpen && gitStatus?.is_repo) {
-      refreshGitVersions();
-    }
-  }, [gitVersionsOpen, gitStatus?.is_repo, refreshGitVersions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -937,161 +812,6 @@ export function MySkills() {
     });
   };
 
-  const handleSetupClone = async () => {
-    setGitLoading("start");
-    try {
-      await api.gitBackupClone(gitRemoteConfig);
-      toast.success(t("settings.gitCloneSuccess"));
-      await refreshGitStatus();
-    } catch (e) {
-      toast.error(mapGitError(e));
-      throw e;
-    } finally {
-      setGitLoading(null);
-    }
-  };
-
-  const handleSetupInit = async () => {
-    setGitLoading("start");
-    try {
-      await api.gitBackupInit();
-      // If a remote is configured, attach it so the toolbar reflects "needs first push"
-      // rather than "synced", and the next click of Sync can push -u origin <branch>.
-      if (gitRemoteConfig) {
-        try {
-          await api.gitBackupSetRemote(gitRemoteConfig);
-        } catch (remoteErr) {
-          toast.error(mapGitError(remoteErr));
-        }
-      }
-      toast.success(t("settings.gitInitSuccess"));
-      await refreshGitStatus();
-    } catch (e) {
-      toast.error(mapGitError(e));
-      throw e;
-    } finally {
-      setGitLoading(null);
-    }
-  };
-
-  const handleRecoveryReclone = async () => {
-    if (!gitRemoteConfig) {
-      toast.info(t("settings.gitNeedRemoteSetup"));
-      return;
-    }
-    setGitLoading("recovery");
-    try {
-      await api.gitBackupReclone(gitRemoteConfig);
-      toast.success(t("settings.gitRecoveryRecloneSuccess"));
-      await Promise.all([refreshGitStatus(), refreshManagedSkills()]);
-    } catch (e) {
-      toast.error(mapGitError(e));
-      throw e;
-    } finally {
-      setGitLoading(null);
-    }
-  };
-
-  const handleGitSync = async () => {
-    setGitLoading("sync");
-    try {
-      let status = await api.gitBackupStatus();
-      if (!status.is_repo) {
-        toast.info(t("settings.gitNotInitialized"));
-        return;
-      }
-
-      if (!status.remote_url && gitRemoteConfig) {
-        await api.gitBackupSetRemote(gitRemoteConfig);
-        status = await api.gitBackupStatus();
-      }
-
-      if (!status.remote_url) {
-        toast.info(t("settings.gitNeedRemoteSetup"));
-        return;
-      }
-
-      // Pre-flight: surface structural problems that would corrupt or block sync.
-      // `no_upstream` is intentionally NOT treated as fatal here — the backend's
-      // push path retries with `push -u origin <branch>`, which is the correct
-      // behavior for a freshly initialized repo or an empty remote. If that
-      // retry actually fails we'll still route to the recovery dialog via the
-      // post-failure handler below.
-      if (
-        status.upstream_health === "unrelated_histories"
-        || status.upstream_health === "detached"
-      ) {
-        setRecoveryReason(status.upstream_health);
-        setRecoveryOpen(true);
-        return;
-      }
-
-      let committed = false;
-      if (status.has_changes) {
-        await api.gitBackupCommit(t("settings.gitCommitPlaceholder"));
-        committed = true;
-        status = await api.gitBackupStatus();
-      }
-
-      if (status.behind > 0) {
-        await api.gitBackupPull();
-        status = await api.gitBackupStatus();
-        toast.success(t("settings.gitPullSuccess"));
-      }
-
-      // `no_upstream` means the local branch has commits but no remote-tracking
-      // branch yet (fresh init against an empty remote). `ahead` reads 0 in that
-      // state because there is no @{upstream} to diff against, so without this
-      // the first push is silently skipped and the remote stays empty while we
-      // report "Up to date". The backend push path sets upstream via `-u`.
-      const needsPush =
-        committed || status.ahead > 0 || status.upstream_health === "no_upstream";
-      if (needsPush) {
-        const snapshotTag = await api.gitBackupCreateSnapshot();
-        await api.gitBackupPush();
-        toast.success(t("mySkills.gitSyncSuccessWithVersion", { tag: displaySnapshotLabel(snapshotTag) }));
-      } else {
-        toast.success(t("settings.gitUpToDate"));
-      }
-
-      await refreshGitStatus();
-      if (gitVersionsOpen) {
-        await refreshGitVersions();
-      }
-    } catch (e) {
-      // If sync failed because local/remote diverged, route the user into the recovery flow
-      // instead of leaving them with a raw git error.
-      if (isRecoverableSetupError(e)) {
-        toast.error(mapGitError(e));
-        await refreshGitStatus();
-        setRecoveryReason(
-          isSyncConflictError(e) ? "conflict" : (gitStatus?.upstream_health ?? "unrelated_histories")
-        );
-        setRecoveryOpen(true);
-      } else {
-        toast.error(mapGitError(e));
-      }
-    } finally {
-      setGitLoading(null);
-    }
-  };
-
-  const handleRestoreVersion = async () => {
-    if (!restoreVersionTag) return;
-    setRestoringVersionTag(restoreVersionTag);
-    try {
-      await api.gitBackupRestoreVersion(restoreVersionTag);
-      toast.success(t("mySkills.gitVersionRestoreSuccess", { tag: displaySnapshotLabel(restoreVersionTag) }));
-      toast.info(t("mySkills.gitVersionRestoreNeedSync"));
-      await Promise.all([refreshGitStatus(), refreshGitVersions(), refreshManagedSkills()]);
-      setRestoreVersionTag(null);
-    } catch (error: unknown) {
-      toast.error(mapGitError(error));
-    } finally {
-      setRestoringVersionTag(null);
-    }
-  };
-
   type GitToolbarMode =
     | "loading"
     | "uninitialized"
@@ -1121,53 +841,45 @@ export function MySkills() {
     return "up_to_date";
   };
 
-  const formatSnapshotWhen = (tag: string | null) => {
-    if (!tag) return null;
-    const label = displaySnapshotLabel(tag);
-    // Try to format YYYYMMDD-HHMMSS into MM-DD HH:MM
-    const match = label.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
-    if (match) {
-      const [, , month, day, hour, min] = match;
-      return `${month}-${day} ${hour}:${min}`;
+  const getGitStatusMeta = (mode: GitToolbarMode) => {
+    if (mode === "loading") {
+      return {
+        icon: Loader2,
+        label: t("backup.status.loading"),
+        className: "text-muted",
+        iconClassName: "animate-spin",
+      };
     }
-    return label;
-  };
-
-  // Compact inline status: only render when there's actionable info the button alone
-  // does not convey. The button already tells the user "Synced" / "Set Up Backup" /
-  // "Fix Sync Setup", so we suppress redundant labels for those modes.
-  const renderGitInlineStatus = (mode: GitToolbarMode) => {
-    if (!gitStatus || mode === "loading" || mode === "up_to_date") return null;
-    if (mode === "uninitialized" || mode === "needs_remote" || mode === "needs_fix") {
-      return null;
+    if (mode === "uninitialized" || mode === "needs_remote") {
+      return {
+        icon: GitBranch,
+        label: t("backup.status.notConnected"),
+        className: "text-muted",
+        iconClassName: "",
+      };
     }
-    const parts: string[] = [];
-    if (gitStatus.has_changes || gitStatus.ahead > 0) {
-      const localCount = Math.max(gitStatus.ahead, gitStatus.has_changes ? 1 : 0);
-      parts.push(`↑${localCount}`);
+    if (mode === "needs_fix") {
+      return {
+        icon: Wrench,
+        label: t("backup.status.needsFix"),
+        className: "text-red-500",
+        iconClassName: "",
+      };
     }
-    if (gitStatus.behind > 0) {
-      parts.push(`↓${gitStatus.behind}`);
+    if (mode === "pending_changes") {
+      return {
+        icon: ArrowUpCircle,
+        label: t("backup.status.pending"),
+        className: "text-amber-600 dark:text-amber-400",
+        iconClassName: "",
+      };
     }
-    if (parts.length === 0 && gitStatus.upstream_health === "no_upstream") {
-      parts.push("↑");
-    }
-    if (parts.length === 0) return null;
-    return (
-      <span
-        className="text-[11px] font-medium text-amber-600 dark:text-amber-400 tabular-nums"
-        title={[
-          gitStatus.has_changes || gitStatus.ahead > 0
-            ? t("mySkills.gitInlineLocalChanges", { count: Math.max(gitStatus.ahead, gitStatus.has_changes ? 1 : 0) })
-            : null,
-          gitStatus.behind > 0 ? t("mySkills.gitInlineRemoteUpdates", { count: gitStatus.behind }) : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      >
-        {parts.join(" ")}
-      </span>
-    );
+    return {
+      icon: CheckCircle2,
+      label: t("backup.status.synced"),
+      className: "text-muted",
+      iconClassName: "",
+    };
   };
 
   const sourceIcon = (type: string) => {
@@ -1203,28 +915,6 @@ export function MySkills() {
 
   const sourceTypeLabel = (skill: ManagedSkill) =>
     skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
-
-  const formatGitDateTime = (iso: string) => {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
-  };
-
-  const renderCurrentVersionText = () => {
-    if (!gitStatus?.is_repo) return null;
-    if (gitStatus.current_snapshot_tag) {
-      return t("mySkills.gitCurrentVersionSnapshot", {
-        tag: displaySnapshotLabel(gitStatus.current_snapshot_tag),
-      });
-    }
-    if (gitStatus.restored_from_tag) {
-      return t("mySkills.gitCurrentVersionRestored", {
-        tag: displaySnapshotLabel(gitStatus.restored_from_tag),
-      });
-    }
-    return t("mySkills.gitCurrentVersionUnknown");
-  };
 
   const refreshLabel = (skill: ManagedSkill) =>
     skill.source_type === "local" || skill.source_type === "import"
@@ -1301,84 +991,21 @@ export function MySkills() {
         <div className="app-segmented">
           {(() => {
             const mode = getGitToolbarMode();
-            const inlineStatus = renderGitInlineStatus(mode);
-            const snapshotWhen = formatSnapshotWhen(gitStatus?.current_snapshot_tag ?? null);
+            const meta = getGitStatusMeta(mode);
+            const Icon = meta.icon;
             return (
-              <>
-                {inlineStatus ? (
-                  <span className="mr-0.5 inline-flex items-center px-1 leading-tight">
-                    {inlineStatus}
-                  </span>
-                ) : null}
-
-                {mode === "uninitialized" || mode === "needs_remote" ? (
-                  <button
-                    onClick={() => setSetupOpen(true)}
-                    disabled={!!gitLoading}
-                    className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
-                  >
-                    {gitLoading === "start" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <GitBranch className="h-3.5 w-3.5" />
-                    )}
-                    {gitLoading === "start" ? t("settings.gitInitializing") : t("settings.gitStartBackup")}
-                  </button>
-                ) : mode === "needs_fix" ? (
-                  <button
-                    onClick={() => {
-                      setRecoveryReason(gitStatus?.upstream_health ?? "unrelated_histories");
-                      setRecoveryOpen(true);
-                    }}
-                    disabled={!!gitLoading}
-                    className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-red-500 transition-colors hover:bg-surface-hover disabled:opacity-50"
-                  >
-                    {gitLoading === "recovery" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Wrench className="h-3.5 w-3.5" />
-                    )}
-                    {t("mySkills.gitRepoFixSetup")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleGitSync}
-                    disabled={!!gitLoading || mode === "up_to_date"}
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover disabled:opacity-50",
-                      mode === "pending_changes" ? "text-amber-600 dark:text-amber-400" : "text-muted"
-                    )}
-                  >
-                    {gitLoading === "sync" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : mode === "up_to_date" ? (
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                    ) : (
-                      <ArrowUpCircle className="h-3.5 w-3.5" />
-                    )}
-                    {gitLoading === "sync"
-                      ? t("mySkills.gitRepoSyncing")
-                      : mode === "up_to_date"
-                        ? t("mySkills.gitRepoSynced")
-                        : t("mySkills.gitRepoSync")}
-                  </button>
+              <button
+                type="button"
+                onClick={() => navigate("/backup")}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover hover:text-secondary",
+                  meta.className
                 )}
-
-                {gitStatus?.is_repo ? (
-                  <button
-                    onClick={() => setGitVersionsOpen((v) => !v)}
-                    disabled={!!gitLoading}
-                    title={snapshotWhen ? t("mySkills.gitInlineLastSnapshot", { when: snapshotWhen }) : undefined}
-                    className={cn(
-                      "ml-1 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover disabled:opacity-50",
-                      gitVersionsOpen ? "text-secondary" : "text-muted"
-                    )}
-                  >
-                    <History className="h-3.5 w-3.5" />
-                    {t("mySkills.gitSnapshots")}
-                  </button>
-                ) : null}
-              </>
+                title={t("sidebar.backup")}
+              >
+                <Icon className={cn("h-3.5 w-3.5", meta.iconClassName)} />
+                {meta.label}
+              </button>
             );
           })()}
           <button
@@ -1521,58 +1148,6 @@ export function MySkills() {
         />
       )}
 
-      {gitVersionsOpen && gitStatus?.is_repo && (
-        <div className="app-panel -mt-2 mb-2 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="min-w-0">
-              <h3 className="text-[13px] font-semibold text-secondary">{t("mySkills.gitVersionHistory")}</h3>
-              <div className="truncate text-[11px] text-faint">{renderCurrentVersionText()}</div>
-            </div>
-            <button
-              onClick={refreshGitVersions}
-              disabled={gitVersionsLoading || !!gitLoading}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
-            >
-              <RefreshCw className={cn("h-3 w-3", gitVersionsLoading && "animate-spin")} />
-              {t("settings.refresh")}
-            </button>
-          </div>
-          {gitVersionsLoading ? (
-            <div className="py-2 text-[13px] text-muted">{t("mySkills.gitVersionLoading")}</div>
-          ) : gitVersions.length === 0 ? (
-            <div className="py-2 text-[13px] text-muted">{t("mySkills.gitVersionEmpty")}</div>
-          ) : (
-            <div className="max-h-64 space-y-1 overflow-auto pr-1">
-              {gitVersions.map((version) => (
-                <div
-                  key={version.tag}
-                  className="flex items-center justify-between rounded-md border border-border-subtle bg-bg-secondary px-2.5 py-2"
-                >
-                  <div className="min-w-0 pr-3">
-                    <div className="truncate text-[13px] font-medium text-secondary">{displaySnapshotLabel(version.tag)}</div>
-                    <div className="truncate text-[12px] text-muted">
-                      {version.message || version.commit}
-                    </div>
-                    <div className="text-[11px] text-faint">
-                      {version.commit} · {formatGitDateTime(version.committed_at)}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setRestoreVersionTag(version.tag)}
-                    disabled={!!restoringVersionTag}
-                    className="shrink-0 rounded-md border border-border-subtle px-2 py-1 text-[12px] font-medium text-secondary hover:bg-surface-hover disabled:opacity-50"
-                  >
-                    {restoringVersionTag === version.tag
-                      ? t("mySkills.gitVersionRestoring")
-                      : t("mySkills.gitVersionRestore")}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {filtered.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center pb-20 text-center">
           <Layers className="mb-4 h-12 w-12 text-faint" />
@@ -1674,16 +1249,27 @@ export function MySkills() {
                     <p className="text-[13px] leading-[18px] text-muted truncate">
                       {skill.description || "—"}
                     </p>
-                    {badge && (
+                    {(badge || conflictIds.has(skill.id)) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={cn(
-                            "rounded-full px-2 py-0.5 text-[13px] font-medium",
-                            badge.className
-                          )}
-                        >
-                          {badge.label}
-                        </span>
+                        {conflictIds.has(skill.id) && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
+                            className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[13px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                            title={t("mySkills.needsAttentionHint")}
+                          >
+                            {t("mySkills.needsAttention")}
+                          </button>
+                        )}
+                        {badge && (
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-[13px] font-medium",
+                              badge.className
+                            )}
+                          >
+                            {badge.label}
+                          </span>
+                        )}
                         {isMissingLocalSource && (
                           <>
                             <button
@@ -1872,6 +1458,15 @@ export function MySkills() {
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">
+                  {conflictIds.has(skill.id) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
+                      className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[12px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                      title={t("mySkills.needsAttentionHint")}
+                    >
+                      {t("mySkills.needsAttention")}
+                    </button>
+                  )}
                   {badge && (
                     <span
                       className={cn(
@@ -2046,28 +1641,6 @@ export function MySkills() {
         allTags={allTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onApply={handleBatchEditTags}
-      />
-      <ConfirmDialog
-        open={restoreVersionTag !== null}
-        title={t("mySkills.gitVersionRestoreTitle")}
-        message={t("mySkills.gitVersionRestoreConfirm", { tag: displaySnapshotLabel(restoreVersionTag || "") })}
-        tone="warning"
-        confirmLabel={t("mySkills.gitVersionRestore")}
-        onClose={() => setRestoreVersionTag(null)}
-        onConfirm={handleRestoreVersion}
-      />
-      <GitSetupDialog
-        open={setupOpen}
-        hasRemote={!!gitRemoteConfig}
-        onClose={() => setSetupOpen(false)}
-        onClone={handleSetupClone}
-        onInit={handleSetupInit}
-      />
-      <GitRecoveryDialog
-        open={recoveryOpen}
-        reason={recoveryReason}
-        onClose={() => setRecoveryOpen(false)}
-        onReclone={handleRecoveryReclone}
       />
     </div>
   );

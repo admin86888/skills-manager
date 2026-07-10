@@ -760,6 +760,11 @@ pub fn quit_app(app: &tauri::AppHandle) {
             log::error!("Failed to destroy main window while quitting: {err}");
         }
     }
+    // 退出前 auto-backup (§3.4): local commit only, fail-fast on a busy lock,
+    // after the window is gone so quitting feels instant.
+    if let Some(store) = app.try_state::<Arc<core::skill_store::SkillStore>>() {
+        core::auto_backup::commit_on_exit(&store);
+    }
     app.exit(0);
 }
 
@@ -830,18 +835,24 @@ pub fn run() {
 
             // One-time repair for skills uploaded before sync targets were
             // registered on import: they have a center record but no target,
-            // leaving them button-less in the workspace. Idempotent and cheap
-            // once repaired.
-            let step = Instant::now();
-            let repaired =
-                commands::agent_workspace::backfill_stranded_agent_targets(&store_for_setup);
-            if repaired > 0 {
-                log::info!(
-                    "startup: backfilled {} stranded agent skill target(s) in {} ms",
-                    repaired,
-                    step.elapsed().as_millis()
-                );
-            }
+            // leaving them button-less in the workspace. This scans and hashes
+            // every agent's local skills, so it must NOT block the window
+            // (#248: it ran ~8s synchronously here on every launch). Run it in
+            // the background after the UI is up; the function itself skips the
+            // scan when the stranded set is unchanged from the last attempt.
+            let store_for_backfill = store_for_setup.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let step = Instant::now();
+                let repaired =
+                    commands::agent_workspace::backfill_stranded_agent_targets(&store_for_backfill);
+                if repaired > 0 {
+                    log::info!(
+                        "startup: backfilled {} stranded agent skill target(s) in {} ms",
+                        repaired,
+                        step.elapsed().as_millis()
+                    );
+                }
+            });
 
             let step = Instant::now();
             if is_tray_icon_enabled(&store_for_setup) {
@@ -867,6 +878,36 @@ pub fn run() {
                 "startup: skill auto-updater spawned in {} ms",
                 step.elapsed().as_millis()
             );
+
+            // Object-merge crash recovery (merge-engine design §5): finish or
+            // roll back an interrupted sync apply before any background work
+            // can touch the repo. Best-effort, never blocks startup.
+            let store_for_merge_recovery = store_for_setup.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                core::merge::recover_on_startup(
+                    &store_for_merge_recovery,
+                    &core::central_repo::skills_dir(),
+                );
+            });
+
+            // Automatic backup (§3.4): debounced commit+push after central-repo
+            // changes; the first round also uploads whatever the exit-time
+            // commit captured last session.
+            core::auto_backup::start(app.handle().clone(), store_for_setup.clone());
+
+            // One-time (idempotent) security migration: move credentials
+            // embedded in the backup remote URL into the OS keychain so no
+            // token stays in `.git/config`. Best-effort in the background —
+            // offline machines retry on the next launch.
+            let store_for_cred_migration = store_for_setup.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match commands::git_backup::migrate_embedded_credentials(&store_for_cred_migration)
+                {
+                    Ok(Some(_)) => log::info!("startup: migrated backup token to OS keychain"),
+                    Ok(None) => {}
+                    Err(e) => log::warn!("startup: backup credential migration skipped: {e:#}"),
+                }
+            });
 
             // Intercept window close — let frontend decide (close vs hide to tray)
             // When QUITTING is set, allow the close to proceed so the process fully exits.
@@ -951,6 +992,7 @@ pub fn run() {
             commands::settings::set_settings,
             commands::settings::get_central_repo_path,
             commands::settings::get_central_repo_path_override,
+            commands::settings::get_central_repo_warnings,
             commands::settings::set_central_repo_path,
             commands::settings::open_central_repo_folder,
             commands::settings::check_app_update,
@@ -967,6 +1009,13 @@ pub fn run() {
             commands::git_backup::git_backup_status,
             commands::git_backup::git_backup_init,
             commands::git_backup::git_backup_set_remote,
+            commands::git_backup::github_backup_connect,
+            commands::git_backup::github_device_flow_start,
+            commands::git_backup::github_device_flow_poll,
+            commands::git_backup::git_backup_sanitize_remote_url,
+            commands::git_backup::git_backup_migrate_credentials,
+            commands::git_backup::git_backup_size_report,
+            commands::git_backup::git_backup_remove_remote,
             commands::git_backup::git_backup_commit,
             commands::git_backup::git_backup_push,
             commands::git_backup::git_backup_pull,
@@ -975,6 +1024,11 @@ pub fn run() {
             commands::git_backup::git_backup_create_snapshot,
             commands::git_backup::git_backup_list_versions,
             commands::git_backup::git_backup_restore_version,
+            commands::git_backup::backup_device_name,
+            commands::git_backup::backup_set_device_name,
+            commands::git_backup::git_backup_pending_conflicts,
+            commands::git_backup::git_backup_resolve_conflict,
+            commands::git_backup::git_backup_sync,
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,

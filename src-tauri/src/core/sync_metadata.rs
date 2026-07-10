@@ -22,7 +22,7 @@ pub struct SchemaFile {
     pub created_by: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceMeta {
     #[serde(rename = "type")]
     pub source_type: String,
@@ -32,7 +32,7 @@ pub struct SourceMeta {
     pub branch: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillMetaFile {
     pub schema_version: u32,
     pub skill_id: String,
@@ -155,6 +155,11 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         .map(|skill| (skill.id.clone(), skill))
         .collect();
 
+    // Every surviving row gets its central_path rewritten below; park them
+    // on placeholders first so path reassignments between skills (renames or
+    // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
+    store.park_central_paths_for_reindex()?;
+
     for meta in skills {
         let skill_dir = skills_root.join(&meta.path);
         if !skill_dir.is_dir() {
@@ -179,6 +184,12 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         };
         let central_path = skill_dir.to_string_lossy().to_string();
 
+        let new_hash = super::content_hash::hash_directory(&skill_dir).ok();
+        let updated_at = match previous {
+            Some(prev) if prev.content_hash == new_hash => prev.updated_at,
+            _ => now,
+        };
+
         let record = SkillRecord {
             id: meta.skill_id.clone(),
             name,
@@ -191,10 +202,10 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
             source_revision: previous.and_then(|s| s.source_revision.clone()),
             remote_revision: previous.and_then(|s| s.remote_revision.clone()),
             central_path,
-            content_hash: super::content_hash::hash_directory(&skill_dir).ok(),
+            content_hash: new_hash,
             enabled: meta.enabled,
             created_at: previous.map(|s| s.created_at).unwrap_or(now),
-            updated_at: now,
+            updated_at,
             status: "ok".to_string(),
             update_status: previous
                 .map(|s| s.update_status.clone())
@@ -558,7 +569,10 @@ fn relative_skill_path(central_path: &str) -> Result<String> {
     Ok(value)
 }
 
-fn path_key(path: &str) -> String {
+/// Case/Unicode-folded key of a relative skill path. Shared with the merge
+/// engine (§2.1): metadata rebuilt during a merge must use the exact same
+/// folding as metadata written from the DB.
+pub(crate) fn path_key(path: &str) -> String {
     path.split('/')
         .map(|part| caseless::default_case_fold_str(&part.nfc().collect::<String>()))
         .collect::<Vec<_>>()
@@ -575,12 +589,21 @@ fn sorted_tags(tags: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Canonical on-disk JSON encoding for metadata files. The merge engine
+/// reuses this to rebuild merged metadata blobs so that two devices merging
+/// the same pair of commits produce byte-identical blobs → identical tree
+/// OIDs (§2.1 / §10).
+pub(crate) fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut bytes = serde_json::to_vec_pretty(value)?;
-    bytes.push(b'\n');
+    let bytes = canonical_json_bytes(value)?;
     let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::now_v7()));
     {
         let mut file = fs::File::create(&tmp)?;
@@ -749,6 +772,58 @@ mod tests {
                 .remove("skill-1")
                 .unwrap(),
             vec!["tag-a".to_string(), "tag-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn reindex_preserves_updated_at_when_content_unchanged() {
+        let repo = test_repo();
+        let skill_dir = write_skill_dir("stable-skill");
+
+        let mut record = sample_skill("skill-stable", &skill_dir);
+        record.updated_at = 1_000_000;
+        record.content_hash =
+            Some(super::super::content_hash::hash_directory(&skill_dir).unwrap());
+        repo.store.insert_skill(&record).unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        let after = repo
+            .store
+            .get_skill_by_id("skill-stable")
+            .unwrap()
+            .expect("skill must still exist");
+        assert_eq!(
+            after.updated_at, 1_000_000,
+            "updated_at must not change when skill content is unchanged"
+        );
+    }
+
+    #[test]
+    fn reindex_updates_updated_at_when_content_changes() {
+        let repo = test_repo();
+        let skill_dir = write_skill_dir("changing-skill");
+
+        let mut record = sample_skill("skill-changing", &skill_dir);
+        record.updated_at = 1_000_000;
+        record.content_hash = Some("old-hash-before-change".to_string());
+        repo.store.insert_skill(&record).unwrap();
+        write_all_from_db_unlocked(&repo.store).unwrap();
+
+        // Modify the skill content so the hash changes
+        fs::write(skill_dir.join("extra.md"), "new content").unwrap();
+
+        reindex_from_metadata_unlocked(&repo.store).unwrap();
+
+        let after = repo
+            .store
+            .get_skill_by_id("skill-changing")
+            .unwrap()
+            .expect("skill must still exist");
+        assert_ne!(
+            after.updated_at, 1_000_000,
+            "updated_at must be refreshed when skill content changes"
         );
     }
 }
