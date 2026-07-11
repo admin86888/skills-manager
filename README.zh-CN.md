@@ -110,6 +110,8 @@ Cursor · Claude Code · Codex · Grok · OpenCode · Amp · Kilo Code · Roo Co
 
 设置页中的 **帮助** 按钮会展示与上面一致的快速流程：推荐工作流、Preset、安装 Skills、技能库（含「未标签」筛选与卡片删除按钮）、全局工作区与 **+ 添加 Skills** 弹层、项目工作区的多 Agent 目标选择器、备份与多设备同步，以及环境设置（含「导出日志」用于 Issue 反馈），方便用户不离开应用也能快速理解使用方式。
 
+完整的界面操作、作用范围、Preset 计数和删除行为说明见 [GUI 使用说明](./docs/gui-user-guide.zh-CN.md)。
+
 ## 技术栈
 
 | 层 | 技术 |
