@@ -522,6 +522,9 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
 
 pub fn ensure_cli_scenario_state(store: &SkillStore) -> Result<(), AppError> {
     let mut scenarios = store.get_all_scenarios().map_err(AppError::db)?;
+    if scenarios.is_empty() && sync_metadata::metadata_has_complete_scenario_snapshot() {
+        return Ok(());
+    }
     if scenarios.is_empty() {
         let now = chrono::Utc::now().timestamp_millis();
         let default_scenario = ScenarioRecord {
@@ -1049,10 +1052,11 @@ mod skip_check_mode_tests {
 
 #[cfg(test)]
 mod preset_crud_tests {
-    use super::{create_preset, delete_preset};
+    use super::{create_preset, delete_preset, ensure_cli_scenario_state};
     use crate::core::{
         central_repo,
         skill_store::{ScenarioRecord, SkillStore},
+        sync_metadata,
     };
     use std::sync::MutexGuard;
     use tempfile::{tempdir, TempDir};
@@ -1163,5 +1167,22 @@ mod preset_crud_tests {
     fn delete_unknown_preset_errors() {
         let repo = test_repo();
         assert!(delete_preset(&repo.store, "missing").is_err());
+    }
+
+    #[test]
+    fn cli_state_preserves_intentionally_empty_preset_list() {
+        let repo = test_repo();
+        ensure_cli_scenario_state(&repo.store).unwrap();
+        let default_id = repo.store.get_active_scenario_id().unwrap().unwrap();
+
+        delete_preset(&repo.store, &default_id).unwrap();
+        assert!(sync_metadata::metadata_has_complete_scenario_snapshot());
+
+        let reopened = SkillStore::new(&central_repo::base_dir().join("test.db")).unwrap();
+        sync_metadata::reindex_from_metadata(&reopened).unwrap();
+        ensure_cli_scenario_state(&reopened).unwrap();
+
+        assert!(reopened.get_all_scenarios().unwrap().is_empty());
+        assert!(reopened.get_active_scenario_id().unwrap().is_none());
     }
 }
